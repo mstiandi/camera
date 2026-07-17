@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Water Mirror — 水镜</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { overflow:hidden; background:#000; }
+  canvas { position:fixed; top:0; left:0; width:100%; height:100%; z-index:1; }
+  #loading {
+    position:fixed; top:0; left:0; width:100%; height:100%;
+    z-index:10; background:#0a0a1a;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    color:#667; font-family:monospace; font-size:14px;
+    transition:opacity .5s;
+  }
+  .spinner {
+    width:30px; height:30px;
+    border:2px solid rgba(255,255,255,.1);
+    border-top-color:rgba(255,255,255,.5);
+    border-radius:50%;
+    animation:spin .8s linear infinite;
+    margin-bottom:14px;
+  }
+  @keyframes spin { to{transform:rotate(360deg)} }
+  #info {
+    position:fixed; top:14px; left:18px; z-index:5;
+    color:rgba(255,255,255,.3); font-family:monospace;
+    font-size:12px; pointer-events:none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="loading"><div class="spinner"></div><div id="lt">初始化…</div></div>
+<video id="cam" autoplay playsinline muted style="display:none"></video>
+<div id="info"></div>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver } from './vision_bundle.mjs';
+
+const cvs = document.getElementById('c');
+const vid = document.getElementById('cam');
+const info = document.getElementById('info');
+const loadEl = document.getElementById('loading');
+const loadTxt = document.getElementById('lt');
+
+const SIM = 512;
+let gl, texA, texB, fboA, fboB, camTex;
+let sPrg, wPrg, dPrg, fsQ;
+let hl = null, stream = null, rid = 0;
+let showFPS = false, frames = 0, ftime = 0, fps = 0, hasCam = false;
+let lastT = -1, camW = 640, camH = 480;
+
+function sh(gl, t, src) {
+  const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function prg(gl, vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, sh(gl, gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, sh(gl, gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  p.u = {};
+  const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) { const u = gl.getActiveUniform(p, i); p.u[u.name] = gl.getUniformLocation(p, u.name); }
+  return p;
+}
+function tex(gl, w, h, t) {
+  const x = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, x);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, t, null);
+  return x;
+}
+function fbo(gl, t) {
+  const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); return f;
+}
+
+const vsF = `attribute vec2 a;varying vec2 v;void main(){gl_Position=vec4(a,0,1);v=a*.5+.5;}`;
+const vsS = `attribute vec2 a;uniform vec2 c;uniform float r;varying vec2 v;void main(){gl_Position=vec4(a*r+c*2.-1.,0,1);v=a;}`;
+const fsS = `precision highp float;varying vec2 v;uniform float s;void main(){float d=length(v);if(d>1.)discard;gl_FragColor=vec4(exp(-d*d*4.)*s,0,0,1);}`;
+const fsW = `precision highp float;uniform sampler2D u;uniform vec2 t;uniform float d;varying vec2 v;
+void main(){
+  float L=texture2D(u,v+vec2(-t.x,0.)).r;
+  float R=texture2D(u,v+vec2(t.x,0.)).r;
+  float B=texture2D(u,v+vec2(0.,-t.y)).r;
+  float Tt=texture2D(u,v+vec2(0.,t.y)).r;
+  float O=texture2D(u,v).r;
+  gl_FragColor=vec4(((L+R+B+Tt)*.5-O)*d,0,0,1);
+}`;
+
+// Key shader: camera image distorted by ripple height-field normals
+const fsD = `precision highp float;
+uniform sampler2D u_h;
+uniform sampler2D u_cam;
+uniform vec2 t;
+uniform vec3 L;
+varying vec2 v;
+void main(){
+  float C=texture2D(u_h,v).r;
+  float Lf=texture2D(u_h,v+vec2(-t.x,0.)).r;
+  float R=texture2D(u_h,v+vec2(t.x,0.)).r;
+  float B=texture2D(u_h,v+vec2(0.,-t.y)).r;
+  float Tt=texture2D(u_h,v+vec2(0.,t.y)).r;
+
+  // Gradient displacement — direct scaling, visible
+  vec2 grad=vec2(R-Lf,Tt-B);
+  vec2 d=v+grad*1.5;
+
+  d=clamp(d,0.,1.);
+  vec3 col=texture2D(u_cam,vec2(d.x,1.-d.y)).rgb;
+
+  // Ripple brightness
+  float ripple=abs(C)*8.;
+  col+=ripple*vec3(0.15,0.2,0.25);
+
+  gl_FragColor=vec4(col,1);
+}`;
+
+// === Splat params — juiced up ===
+const TIPS = new Set([4,8,12,16,20]), PALM = new Set([0,5,9,13,17]);
+function si(i) {
+  if (TIPS.has(i)) return {s:.35, r:.06};
+  if (PALM.has(i)) return {s:.22, r:.10};
+  return {s:.10, r:.07};
+}
+
+function drawFS() {
+  gl.bindBuffer(gl.ARRAY_BUFFER, fsQ);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// === Init WebGL ===
+function initGL() {
+  gl = cvs.getContext('webgl', { antialias: false, preserveDrawingBuffer: false });
+  if (!gl || !gl.getExtension('OES_texture_float')) return false;
+
+  sPrg = prg(gl, vsS, fsS);
+  wPrg = prg(gl, vsF, fsW);
+  dPrg = prg(gl, vsF, fsD);
+
+  texA = tex(gl, SIM, SIM, gl.FLOAT);
+  texB = tex(gl, SIM, SIM, gl.FLOAT);
+  fboA = fbo(gl, texA);
+  fboB = fbo(gl, texB);
+
+  fsQ = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, fsQ);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboA); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboB); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+  resize();
+  window.addEventListener('resize', resize);
+  return true;
+}
+function resize() {
+  const d = Math.min(devicePixelRatio||1, 2);
+  cvs.width = innerWidth*d; cvs.height = innerHeight*d;
+  cvs.style.width = innerWidth+'px'; cvs.style.height = innerHeight+'px';
+}
+
+// === Splat ===
+function splat(lms) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboA); gl.viewport(0,0,SIM,SIM);
+  gl.useProgram(sPrg);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.bindBuffer(gl.ARRAY_BUFFER, fsQ);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+  for (const lm of lms) for (let i = 0; i < lm.length; i++) {
+    const p = lm[i], z = si(i);
+    gl.uniform2f(sPrg.u.c, p.x, 1-p.y);  // already Y-flipped
+    gl.uniform1f(sPrg.u.r, z.r);
+    gl.uniform1f(sPrg.u.s, z.s);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+  gl.disable(gl.BLEND);
+}
+function wavePass() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fboB); gl.viewport(0,0,SIM,SIM);
+  gl.useProgram(wPrg); gl.disable(gl.BLEND);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texA);
+  gl.uniform1i(wPrg.u.u, 0);
+  gl.uniform2f(wPrg.u.t, 1/SIM, 1/SIM);
+  gl.uniform1f(wPrg.u.d, .993);
+  drawFS();
+}
+function distortPass(now) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0,0,cvs.width,cvs.height);
+  gl.useProgram(dPrg); gl.disable(gl.BLEND);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texB);
+  gl.uniform1i(dPrg.u.u_h, 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, camTex);
+  gl.uniform1i(dPrg.u.u_cam, 1);
+  gl.uniform2f(dPrg.u.t, 1/SIM, 1/SIM);
+  gl.uniform3f(dPrg.u.L, .3, .4, 1.);
+  drawFS();
+}
+function swap() { [texA,texB]=[texB,texA]; [fboA,fboB]=[fboB,fboA]; }
+
+// === Main loop ===
+function loop(now) {
+  rid = requestAnimationFrame(loop);
+  if (!hl) return;
+
+  let lms = [];
+  if (hasCam && vid.currentTime !== lastT) {
+    lastT = vid.currentTime;
+    // Upload camera frame
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, camTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, vid);
+    try { const r = hl.detectForVideo(vid, now); lms = r.landmarks || []; } catch (_) {}
+  }
+
+  frames++;
+  if (now - ftime >= 1000) { fps = Math.round(frames/((now-ftime)/1000)); frames=0; ftime=now; }
+
+  if (lms.length > 0) splat(lms);
+  wavePass();
+  distortPass(now);
+  swap();
+
+  info.textContent = (showFPS?'FPS:'+fps+'  ':'') + '手:'+lms.length + (lms.length>0?' 🖐':(hasCam?' 挥手起波':' 离线'));
+}
+
+// === Camera ===
+function stopCam() { hasCam=false; if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;} }
+async function startCam() {
+  hasCam = false;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video:true});
+    vid.srcObject = stream; await vid.play();
+    await new Promise(r => { if(vid.videoWidth>0){r();return;} vid.addEventListener('loadedmetadata',r,{once:true}); });
+    camW = vid.videoWidth; camH = vid.videoHeight;
+    // Recreate camera texture at actual camera resolution
+    if (camTex) gl.deleteTexture(camTex);
+    camTex = tex(gl, camW, camH, gl.UNSIGNED_BYTE);
+    hasCam = true;
+    info.textContent = '📹 '+camW+'x'+camH+' — 伸手试试';
+  } catch(e) { info.textContent = '摄像头不可用: '+e.message; }
+}
+
+// === Init ===
+async function init() {
+  loadTxt.textContent = '初始化 WebGL…';
+  if (!initGL()) { loadTxt.textContent='WebGL 不可用'; return; }
+  loadTxt.textContent = '加载手部模型…';
+  const v = await FilesetResolver.forVisionTasks('./wasm');
+  hl = await HandLandmarker.createFromOptions(v, {
+    baseOptions: { modelAssetPath: './hand_landmarker.task', delegate: 'GPU' },
+    runningMode: 'VIDEO', numHands: 2,
+    minHandDetectionConfidence: .5, minTrackingConfidence: .5
+  });
+  loadTxt.textContent = '就绪';
+  rid = requestAnimationFrame(loop);
+  loadEl.style.opacity = '0'; setTimeout(() => loadEl.remove(), 600);
+  startCam();
+}
+window.addEventListener('keydown', e => { if (e.key==='f') showFPS=!showFPS; });
+window.addEventListener('beforeunload', stopCam);
+init();
+</script>
+</body>
+</html>

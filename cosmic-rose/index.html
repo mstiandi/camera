@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>宇宙玫瑰</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;font-family:sans-serif;background:#010108}
+canvas{display:block}
+#pip{position:fixed;bottom:20px;right:20px;width:160px;height:120px;z-index:10;border-radius:10px;border:1px solid rgba(255,255,255,.12);transform:scaleX(-1);object-fit:cover;opacity:.7}
+#s{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10;pointer-events:none;padding:6px 18px;border-radius:14px;font-size:14px;text-align:center;color:rgba(255,255,255,.6);background:rgba(0,0,0,.35);backdrop-filter:blur(8px);transition:all .5s}
+#s.on{color:rgba(255,255,255,.9)}
+#h{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:10;pointer-events:none;color:rgba(255,255,255,.15);font-size:12px;white-space:nowrap;transition:all .4s}
+#l{position:fixed;inset:0;z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .5s;background:#010108}
+#l.done{opacity:0;pointer-events:none}
+#l .r{width:28px;height:28px;border:2px solid rgba(255,255,255,.06);border-top-color:rgba(200,160,255,.6);border-radius:50%;animation:sp .8s linear infinite;margin-bottom:14px}
+@keyframes sp{to{transform:rotate(360deg)}}
+#l .t{color:rgba(255,255,255,.22);font-size:13px;font-family:monospace}
+#d{position:fixed;top:4px;left:4px;z-index:20;color:#0f0;font:10px monospace;pointer-events:none;line-height:1.4;background:rgba(0,0,0,.5);padding:4px 8px;border-radius:4px}
+#flash{position:fixed;inset:0;z-index:50;pointer-events:none;background:white;opacity:0;transition:opacity .08s}
+</style>
+</head>
+<body>
+<video id="pip" autoplay playsinline muted></video>
+<div id="s">等待手势…</div>
+<div id="h"></div>
+<div id="l"><div class="r"></div><div class="t" id="lt">初始化…</div></div>
+<div id="d"></div>
+<div id="flash"></div>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+
+<script type="module" src="app.js"></script>
+
+</body>
+</html>

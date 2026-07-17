@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>隔空画画</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background:#0a0a1a;
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center;
+    min-height:100vh; font-family:sans-serif;
+  }
+  #wrap {
+    position:relative; width:640px; height:480px;
+    border:2px solid rgba(255,255,255,0.15); border-radius:8px;
+    overflow:hidden;
+    box-shadow:0 0 60px rgba(100,140,255,0.15);
+  }
+  #wrap>* { position:absolute; }
+  #stars { top:0; left:0; z-index:1; }
+  #draw { top:0; left:0; z-index:2; background:transparent; }
+  #pip {
+    z-index:3; top:10px; right:10px;
+    width:140px; height:105px;
+    border:2px solid rgba(255,255,255,0.35); border-radius:6px;
+    transform:scaleX(-1); object-fit:cover;
+    opacity:0.9; background:#000;
+  }
+  #cursor {
+    z-index:4; width:24px; height:24px; border-radius:50%;
+    pointer-events:none; transform:translate(-50%,-50%);
+    display:none; box-shadow:0 0 20px currentColor;
+  }
+  #badge {
+    z-index:4; bottom:14px; left:50%; transform:translateX(-50%);
+    padding:5px 18px; border-radius:14px; font-size:13px;
+    font-weight:bold; pointer-events:none;
+    background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);
+    letter-spacing:0.5px;
+  }
+  #log {
+    z-index:4; top:10px; left:10px;
+    font-size:12px; color:#0f0; font-family:monospace;
+    pointer-events:none; line-height:1.7;
+  }
+  #bar { margin-top:14px; display:flex; gap:12px; align-items:center; }
+  button {
+    padding:9px 24px; font-size:15px;
+    border:1px solid rgba(255,255,255,0.15); border-radius:6px;
+    cursor:pointer; font-weight:500;
+  }
+  #clear { background:rgba(255,255,255,0.08); color:#ccc; }
+  #clear:hover { background:rgba(255,255,255,0.15); }
+  #retry { background:#2a5; color:#fff; display:none; }
+  #retry:hover { background:#3b6; }
+  #status { color:#667; font-size:13px; width:640px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="stars"></canvas>
+  <canvas id="draw"></canvas>
+  <video id="pip" autoplay playsinline muted></video>
+  <div id="cursor"></div>
+  <div id="badge">⏸ 暂停</div>
+  <div id="log"></div>
+</div>
+<div id="bar">
+  <button id="clear">清空画布</button>
+  <button id="retry">重新连接</button>
+  <span id="status">初始化…</span>
+</div>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver } from
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs";
+
+// DOM
+const pip = document.getElementById('pip');
+const drawCanvas = document.getElementById('draw');
+const ctx = drawCanvas.getContext('2d');
+const cursor = document.getElementById('cursor');
+const badge = document.getElementById('badge');
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const retryBtn = document.getElementById('retry');
+
+const W = 640, H = 480;
+drawCanvas.width = W;
+drawCanvas.height = H;
+
+// Log helper
+const logs = [];
+function log(msg) { logs.push(msg); if (logs.length>8) logs.shift(); logEl.innerHTML=logs.join('<br>'); }
+
+// Starfield
+(function(){
+  const s = document.getElementById('stars');
+  s.width=W; s.height=H;
+  const sc=s.getContext('2d');
+  sc.fillStyle='#07071a'; sc.fillRect(0,0,W,H);
+  for(let i=0;i<200;i++){
+    sc.fillStyle=`rgba(210,225,255,${Math.random()*0.7+0.3})`;
+    sc.beginPath(); sc.arc(Math.random()*W,Math.random()*H,Math.random()*1.5+0.2,0,Math.PI*2); sc.fill();
+  }
+})();
+
+// Yellow pen
+ctx.strokeStyle='#ff0';
+ctx.lineWidth=4;
+ctx.lineCap='round';
+ctx.lineJoin='round';
+let lastPoint=null;
+
+// Clear
+document.getElementById('clear').addEventListener('click',()=>{
+  ctx.clearRect(0,0,W,H);
+  ctx.beginPath();
+  lastPoint=null;
+});
+
+// Gesture
+function isPointing(lm){ return lm[8].y < lm[6].y; }
+
+// ===== Init =====
+let handLandmarker=null;
+let stream=null;
+let animId=null;
+
+async function init() {
+  log('加载 WASM…');
+  statusEl.textContent='加载模型…';
+
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm"
+  );
+
+  log('创建检测器…');
+  handLandmarker = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      delegate: "GPU"
+    },
+    runningMode: "VIDEO",
+    numHands: 1,
+    minHandDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+
+  log('模型就绪 ✓');
+  startCamera();
+}
+
+async function startCamera() {
+  stopCamera();
+  retryBtn.style.display='none';
+  log('启动摄像头…');
+  statusEl.textContent='启动摄像头…';
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{width:W,height:H,facingMode:'user'}
+    });
+    pip.srcObject=stream;
+    await pip.play();
+
+    await new Promise(r=>{
+      if(pip.videoWidth>0){r();return;}
+      pip.addEventListener('loadedmetadata',r,{once:true});
+    });
+
+    log(`视频 ${pip.videoWidth}x${pip.videoHeight}`);
+    statusEl.textContent='摄像头就绪 — 伸出食指画画';
+    loop();
+  } catch(err){
+    log('ERR:'+err.message);
+    statusEl.textContent='摄像头启动失败: '+err.message;
+    retryBtn.style.display='inline-block';
+    console.error(err);
+  }
+}
+
+function stopCamera(){
+  if(animId){cancelAnimationFrame(animId);animId=null;}
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+}
+
+// ===== Main loop =====
+let lastTime=-1;
+function loop(){
+  if(!stream || !handLandmarker){ animId=requestAnimationFrame(loop); return; }
+
+  const now = performance.now();
+  if(pip.currentTime !== lastTime){
+    lastTime=pip.currentTime;
+    const results = handLandmarker.detectForVideo(pip, now);
+
+    if(results.landmarks && results.landmarks.length>0){
+      const lm=results.landmarks[0];
+      const pointing=isPointing(lm);
+      const x=(1-lm[8].x)*W;
+      const y=lm[8].y*H;
+
+      cursor.style.display='block';
+      cursor.style.left=x+'px';
+      cursor.style.top=y+'px';
+
+      if(pointing){
+        cursor.style.background='rgba(255,255,0,0.5)';
+        cursor.style.border='3px solid rgba(255,255,0,0.9)';
+        cursor.style.color='rgba(255,255,0,0.9)';
+        badge.textContent='✏️ 画画中';
+        badge.style.color='#ff0';
+
+        if(lastPoint){
+          ctx.beginPath();
+          ctx.moveTo(lastPoint.x,lastPoint.y);
+          ctx.lineTo(x,y);
+          ctx.stroke();
+        }else{
+          ctx.beginPath();
+          ctx.arc(x,y,ctx.lineWidth/2,0,Math.PI*2);
+          ctx.fillStyle='#ff0';
+          ctx.fill();
+        }
+        lastPoint={x,y};
+      }else{
+        cursor.style.background='rgba(255,60,60,0.35)';
+        cursor.style.border='2px solid rgba(255,60,60,0.6)';
+        cursor.style.color='rgba(255,60,60,0.6)';
+        badge.textContent='⏸ 暂停';
+        badge.style.color='#f55';
+        lastPoint=null;
+      }
+    }else{
+      cursor.style.display='none';
+      badge.textContent='⏸ 未检测到手';
+      badge.style.color='#999';
+      lastPoint=null;
+    }
+  }
+  animId=requestAnimationFrame(loop);
+}
+
+retryBtn.addEventListener('click',startCamera);
+window.addEventListener('beforeunload',stopCamera);
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Star Atlas</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;font-family:sans-serif;background:#010112}
+canvas{display:block}
+#pip{position:fixed;bottom:20px;right:20px;width:160px;height:120px;z-index:10;border-radius:10px;border:1px solid rgba(255,255,255,.15);transform:scaleX(-1);object-fit:cover;opacity:.75}
+#s{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10;pointer-events:none;padding:6px 18px;border-radius:14px;font-size:13px;text-align:center;color:rgba(255,255,255,.18);background:rgba(0,0,0,.3);backdrop-filter:blur(8px);transition:all .4s}
+#s.on{color:rgba(255,255,255,.85)}
+#h{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:10;pointer-events:none;color:rgba(255,255,255,.14);font-size:12px;white-space:nowrap}
+#l{position:fixed;inset:0;z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .5s;background:#010112}
+#l.done{opacity:0;pointer-events:none}
+#l .r{width:28px;height:28px;border:2px solid rgba(255,255,255,.06);border-top-color:rgba(160,140,255,.6);border-radius:50%;animation:sp .8s linear infinite;margin-bottom:14px}
+@keyframes sp{to{transform:rotate(360deg)}}
+#l .t{color:rgba(255,255,255,.2);font-size:13px;font-family:monospace}
+#d{position:fixed;top:4px;left:4px;z-index:20;color:#0f0;font:10px monospace;pointer-events:none;line-height:1.4;background:rgba(0,0,0,.45);padding:4px 8px;border-radius:4px}
+#err{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:101;color:rgba(255,255,255,.7);font:13px monospace;text-align:center;background:rgba(0,0,0,.75);padding:12px 24px;border-radius:8px;display:none;white-space:pre-line}
+#retryBtn{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:102;padding:10px 28px;font-size:14px;border:1px solid rgba(255,255,255,.2);border-radius:8px;cursor:pointer;background:rgba(255,255,255,.08);color:#ccc;display:none}
+#retryBtn:hover{background:rgba(255,255,255,.15)}
+</style>
+</head>
+<body>
+<video id="pip" autoplay playsinline muted></video>
+<div id="s">loading...</div>
+<div id="h">Point at stars to connect constellations | Open hand to rotate | Fist to clear</div>
+<div id="l"><div class="r"></div><div class="t" id="lt">initializing...</div></div>
+<div id="d"></div>
+<div id="err"></div>
+<button id="retryBtn">Reconnect Camera</button>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+
+<script type="module">
+import * as T from 'three';
+import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
+import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
+import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+const [S,Ld,Lt,cam,D,H,ERR,RETRY]=['s','l','lt','pip','d','h','err','retryBtn'].map(id=>document.getElementById(id));
+const M=Math,P=M.PI,C=M.cos,Sf=M.sin,Sq=M.sqrt,Ab=M.abs,Rn=M.random;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const hsl=(h,s,l)=>{const c=new T.Color();c.setHSL(h,s,l);return c};
+
+// ── Renderer ──
+const ren=new T.WebGLRenderer({antialias:false});
+ren.setPixelRatio(M.min(devicePixelRatio,2));
+ren.setSize(innerWidth,innerHeight);
+ren.domElement.style.background='radial-gradient(ellipse at center,#0a0a1e 0%,#020210 45%,#010108 100%)';
+document.body.prepend(ren.domElement);
+
+const scene=new T.Scene();scene.background=new T.Color(0x020210);
+const camera=new T.PerspectiveCamera(50,innerWidth/innerHeight,.5,40);
+camera.position.set(0,.3,8);camera.lookAt(0,0,0);
+
+const comp=new EffectComposer(ren);
+comp.addPass(new RenderPass(scene,camera));
+const bloom=new UnrealBloomPass(new T.Vector2(innerWidth,innerHeight),1.1,.4,.6);
+comp.addPass(bloom);
+
+// ── Sprites ──
+function mkSprite(sz,color,falloff){
+  const c=document.createElement('canvas');c.width=sz;c.height=sz;
+  const x=c.getContext('2d'),g=x.createRadialGradient(sz/2,sz/2,0,sz/2,sz/2,sz/2);
+  g.addColorStop(0,color||'#fff');g.addColorStop(falloff||.04,'rgba(255,255,255,.95)');
+  g.addColorStop(.15,'rgba(255,255,255,.35)');g.addColorStop(.45,'rgba(255,255,255,.02)');
+  g.addColorStop(1,'transparent');x.fillStyle=g;x.fillRect(0,0,sz,sz);
+  return new T.CanvasTexture(c);
+}
+const sprite=mkSprite(128);
+const spriteSoft=mkSprite(128,'#fff',.08);
+const spriteHot=mkSprite(128,'#ffa',.03); // warm glow for highlighted stars
+
+function mkGeo(p,c){const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(p,3));if(c)g.setAttribute('color',new T.BufferAttribute(c,3));return g}
+
+// ═══════════════════════════════════════════════════
+// DEEP STAR FIELD — spherical shell
+// ═══════════════════════════════════════════════════
+const N=2500,NVOL=600,SHELL_R=18;
+const starPos=new Float32Array(N*3),starCol=new Float32Array(N*3);
+const starBase=new Float32Array(N*3),starBaseCol=new Float32Array(N*3);
+for(let i=0;i<N;i++){
+  const j=i*3;
+  const th=Rn()*P*2,ph=M.acos(2*Rn()-1),r=SHELL_R+Rn()*6;
+  starBase[j]=r*Sf(ph)*C(th);
+  starBase[j+1]=r*Sf(ph)*Sf(th);
+  starBase[j+2]=r*C(ph);
+  const hue=Rn()<.75?.58+Rn()*.18:(Rn()<.5?.1+Rn()*.08:.65+Rn()*.08);
+  const sat=.2+Rn()*.5,lit=.35+Rn()*.55;
+  const c=hsl(hue,sat,lit);
+  starBaseCol[j]=c.r;starBaseCol[j+1]=c.g;starBaseCol[j+2]=c.b;
+  starPos[j]=starBase[j];starPos[j+1]=starBase[j+1];starPos[j+2]=starBase[j+2];
+  starCol[j]=starBaseCol[j];starCol[j+1]=starBaseCol[j+1];starCol[j+2]=starBaseCol[j+2];
+}
+const starGeo=mkGeo(starPos,starCol);
+const starMat=new T.PointsMaterial({size:.06,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.85});
+const starPts=new T.Points(starGeo,starMat);
+scene.add(starPts);
+
+// ═══════════════════════════════════════════════════
+// VOLUME STARS — foreground parallax layer
+// ═══════════════════════════════════════════════════
+const volPos=new Float32Array(NVOL*3),volCol=new Float32Array(NVOL*3);
+const volBase=new Float32Array(NVOL*3),volBaseCol=new Float32Array(NVOL*3);
+for(let i=0;i<NVOL;i++){
+  const j=i*3;
+  volBase[j]=(Rn()-.5)*16;volBase[j+1]=(Rn()-.5)*10;volBase[j+2]=-4+Rn()*10;
+  const c=hsl(.55+Rn()*.25,.3+Rn()*.4,.3+Rn()*.5);
+  volBaseCol[j]=c.r;volBaseCol[j+1]=c.g;volBaseCol[j+2]=c.b;
+  volPos[j]=volBase[j];volPos[j+1]=volBase[j+1];volPos[j+2]=volBase[j+2];
+  volCol[j]=volBaseCol[j];volCol[j+1]=volBaseCol[j+1];volCol[j+2]=volBaseCol[j+2];
+}
+const volGeo=mkGeo(volPos,volCol);
+const volMat=new T.PointsMaterial({size:.05,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.7});
+const volPts=new T.Points(volGeo,volMat);
+scene.add(volPts);
+
+// ═══════════════════════════════════════════════════
+// NEBULAE
+// ═══════════════════════════════════════════════════
+const NEB=1000;
+const nebPos=new Float32Array(NEB*3),nebCol=new Float32Array(NEB*3);
+const nebulae=[
+  {cx:3,cy:1.5,cz:-2,r:3.5,h:.72,s:.7,l:.5,n:300},
+  {cx:-4,cy:-1.2,cz:-1,r:4,h:.58,s:.8,l:.45,n:280},
+  {cx:0,cy:2.5,cz:1,r:3,h:.88,s:.6,l:.5,n:220},
+  {cx:-2,cy:-2.5,cz:-3,r:3.8,h:.52,s:.7,l:.4,n:200},
+];
+let noff=0;
+for(const nb of nebulae){
+  for(let i=0;i<nb.n;i++){
+    const j=(noff+i)*3;
+    const rad=M.abs(Rn()+Rn()+Rn()-1.5)*nb.r;
+    const th=Rn()*P*2,ph=M.acos(2*Rn()-1);
+    nebPos[j]=nb.cx+rad*Sf(ph)*C(th);
+    nebPos[j+1]=nb.cy+rad*Sf(ph)*Sf(th);
+    nebPos[j+2]=nb.cz+rad*C(ph)*.6;
+    const c=hsl(nb.h+Rn()*.08,nb.s+Rn()*.2,nb.l+Rn()*.2);
+    nebCol[j]=c.r;nebCol[j+1]=c.g;nebCol[j+2]=c.b;
+  }
+  noff+=nb.n;
+}
+const nebGeo=mkGeo(nebPos,nebCol);
+const nebMat=new T.PointsMaterial({size:.18,map:spriteSoft,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.55});
+const nebPts=new T.Points(nebGeo,nebMat);
+nebPts.renderOrder=1;nebPts.material.depthTest=true;nebPts.material.depthWrite=false;
+scene.add(nebPts);
+
+// ═══════════════════════════════════════════════════
+// TARGET GLOW — highlight star under cursor
+// ═══════════════════════════════════════════════════
+const glowGeo=new T.BufferGeometry();
+glowGeo.setAttribute('position',new T.BufferAttribute(new Float32Array([0,0,0]),3));
+const glowMat=new T.PointsMaterial({size:.4,map:spriteHot,blending:T.AdditiveBlending,depthTest:false,depthWrite:false,transparent:true,opacity:0,color:new T.Color(0xffaa44)});
+const glowPts=new T.Points(glowGeo,glowMat);
+glowPts.renderOrder=2;
+scene.add(glowPts);
+
+// ═══════════════════════════════════════════════════
+// CONSTELLATION LINES
+// ═══════════════════════════════════════════════════
+const MAX_CONS=20;
+const consPositions=new Float32Array(MAX_CONS*3);
+const consLineGeo=new T.BufferGeometry();
+consLineGeo.setAttribute('position',new T.BufferAttribute(consPositions,3));
+consLineGeo.setDrawRange(0,0);
+const consLineMat=new T.LineBasicMaterial({color:0xaaccff,blending:T.AdditiveBlending,depthTest:false,depthWrite:false,transparent:true,opacity:.9});
+const consLine=new T.Line(consLineGeo,consLineMat);
+consLine.renderOrder=3;consLine.visible=false;
+scene.add(consLine);
+
+// ═══════════════════════════════════════════════════
+// SHOOTING STARS
+// ═══════════════════════════════════════════════════
+const MAX_SHOOT=6;
+const shootPool=[];
+for(let i=0;i<MAX_SHOOT;i++){
+  const tPos=new Float32Array(75),tCol=new Float32Array(75);
+  const geo=new T.BufferGeometry();
+  geo.setAttribute('position',new T.BufferAttribute(tPos,3));
+  geo.setAttribute('color',new T.BufferAttribute(tCol,3));
+  const mat=new T.PointsMaterial({size:.08,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthTest:false,depthWrite:false,transparent:true,opacity:0});
+  const pts=new T.Points(geo,mat);pts.renderOrder=4;
+  scene.add(pts);
+  shootPool.push({pts,geo,mat,alive:false,life:0,maxLife:0,pos:new T.Vector3(),vel:new T.Vector3(),trail:[],tPos,tCol});
+}
+function spawnShoot(){
+  const s=shootPool.find(x=>!x.alive);if(!s)return;
+  s.alive=true;s.maxLife=.8+Rn()*1.2;s.life=s.maxLife;s.trail=[];
+  const ang=Rn()*P*2,dist=5+Rn()*14;
+  s.pos.set(C(ang)*dist,(Rn()-.5)*7,-3+Rn()*8);
+  const dirAng=ang+P/2+(Rn()-.5)*.8;
+  s.vel.set(C(dirAng)*14,Sf(dirAng)*4,(Rn()-.5)*3);
+}
+let shootTimer=0;
+
+// ═══════════════════════════════════════════════════
+// GESTURE ANALYSIS
+// ═══════════════════════════════════════════════════
+function countFingers(lm){
+  const tips=[4,8,12,16,20],pips=[3,6,10,14,18];
+  let c=0;
+  for(let i=0;i<5;i++)if(lm[tips[i]].y<lm[pips[i]].y)c++;
+  return c;
+}
+function analyze(lm){
+  const w=lm[0],tips=[4,8,12,16,20],pips=[3,6,10,14,18];
+  let ts=0,ps=0;
+  for(let i=0;i<5;i++){ts+=M.hypot(lm[tips[i]].x-w.x,lm[tips[i]].y-w.y);ps+=M.hypot(lm[pips[i]].x-w.x,lm[pips[i]].y-w.y);}
+  return{
+    openness:M.max(0,M.min(1,(ts/M.max(ps,.01)-1.05)/.25)),
+    pointDir:Ab(lm[8].x-lm[9].x)<.015?0:M.max(-1,M.min(1,(lm[8].x-lm[9].x)*18)),
+  };
+}
+
+// ═══════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════
+let curRotY=0,tgtRotY=.04;
+let curRotX=0,tgtRotX=0;
+let curScale=1,tgtScale=1;
+let ho=false,lg=null,lh=0,fcCache=0;
+let constellation=[],consAge=0;
+let targetStar=-1,targetTimer=0;
+let captureFlash=0;
+let cursorX=0,cursorY=0,cursorVis=false;
+
+// Screen-space: project all stars, find nearest to (fx,fy) within threshold px
+function findNearestStar(fx,fy,thresh){
+  let best=-1,bestD=thresh;
+  const pA=starGeo.attributes.position.array;
+  const v3=new T.Vector3();
+  for(let i=0;i<N;i++){
+    const j=i*3;
+    v3.set(pA[j],pA[j+1],pA[j+2]).project(camera);
+    if(v3.z>=1)continue;
+    const sx=(v3.x*.5+.5)*innerWidth;
+    const sy=(-v3.y*.5+.5)*innerHeight;
+    const d=M.hypot(sx-fx,sy-fy);
+    if(d<bestD){bestD=d;best=i;}
+  }
+  return best;
+}
+
+// ═══════════════════════════════════════════════════
+// MAIN LOOP
+// ═══════════════════════════════════════════════════
+let hl=null,stream=null;
+let tickN=0,fps=0,fpsN=0,fpsT=0;
+const clk=new T.Clock();
+
+function tick(){
+  requestAnimationFrame(tick);
+  const dt=M.min(clk.getDelta(),.12),now=performance.now();
+  tickN++;fpsN++;
+  if(now-fpsT>=1000){fps=fpsN;fpsN=0;fpsT=now;}
+
+  // ── HAND DETECTION ──
+  if(camOK&&hl&&stream&&cam.readyState>=2){
+    try{
+      const res=hl.detectForVideo(cam,now);
+      if(res.landmarks&&res.landmarks.length>0){
+        const lm=res.landmarks[0];
+        lg=analyze(lm);ho=true;lh=now;
+        fcCache=countFingers(lm);const fc=fcCache;
+        // Finger position in screen pixels
+        cursorX=(1-lm[8].x)*innerWidth;
+        cursorY=lm[8].y*innerHeight;
+        cursorVis=true;
+        const dbg=[`HAND:1 F:${fc} O:${lg.openness.toFixed(2)}`];
+
+        // ── GESTURE ROUTING ──
+        targetStar=findNearestStar(cursorX,cursorY,50);
+
+        if(fc===1){
+          // 1 finger: point at stars to capture
+          dbg.push('MODE:capture');
+          if(targetStar>=0){
+            targetTimer+=dt;
+            dbg.push(`STAR:#${targetStar} T:${targetTimer.toFixed(2)}`);
+            if(targetTimer>.5&&!constellation.find(s=>s.index===targetStar)){
+              const j=targetStar*3;
+              const pA=starGeo.attributes.position.array;
+              constellation.push({index:targetStar,pos:new T.Vector3(pA[j],pA[j+1],pA[j+2])});
+              captureFlash=.5;targetTimer=0;
+              dbg.push('CAPTURE!');
+            }
+          }else{targetTimer=0;}
+          tgtRotY=lg.pointDir*.3+.02;
+          tgtRotX=-(lg.openness-.3)*.2;
+          tgtScale=1;
+        }else if(fc>=3){
+          // Open hand: rotate the star field
+          dbg.push('MODE:rotate');
+          tgtRotY=lg.pointDir*5;
+          tgtRotX=.3+(lg.openness-.4)*2;
+          tgtScale=lerp(.85,1.3,lg.openness);
+          targetTimer=0;
+        }else{
+          // Fist or 2 fingers: clear constellation
+          dbg.push('MODE:clear');
+          if(constellation.length>0&&consAge>1.5){
+            constellation=[];consAge=0;consLine.visible=false;
+            consLineGeo.setDrawRange(0,0);
+            captureFlash=.3;
+          }
+          tgtRotY=.03;tgtRotX=0;tgtScale=.88;
+          targetTimer=0;
+        }
+
+        // Update constellation line geometry
+        if(constellation.length>=2){
+          consLine.visible=true;
+          for(let i=0;i<constellation.length;i++){
+            const j=i*3;
+            consPositions[j]=constellation[i].pos.x;
+            consPositions[j+1]=constellation[i].pos.y;
+            consPositions[j+2]=constellation[i].pos.z;
+          }
+          consLineGeo.attributes.position.needsUpdate=true;
+          consLineGeo.setDrawRange(0,constellation.length);
+        }
+        consAge+=dt;
+        D.innerHTML=dbg.join('<br>');
+      }else{
+        ho=false;cursorVis=false;targetStar=-1;targetTimer=0;
+        D.innerHTML='NO HAND<br>FPS:'+fps;
+      }
+    }catch(e){
+      ho=false;cursorVis=false;targetStar=-1;targetTimer=0;
+      D.innerHTML='ERR:'+e.message.slice(0,30)+'<br>FPS:'+fps;
+    }
+  }else{
+    cursorVis=false;targetStar=-1;
+    if(tickN%60===0)D.innerHTML='cam:'+camOK+' hl:'+!!hl+' str:'+!!stream+'<br>FPS:'+fps;
+  }
+
+  // Hand lost → resume auto-rotation
+  if(!ho&&now-lh>1500){tgtRotY=.04;tgtRotX=0;tgtScale=1;}
+
+  // ── SMOOTH TRANSITIONS ──
+  curRotY+=(tgtRotY-curRotY)*3*dt;
+  curRotX+=(tgtRotX-curRotX)*3*dt;
+  curScale+=(tgtScale-curScale)*2.5*dt;
+  captureFlash=M.max(0,captureFlash-3*dt);
+
+  // ── ROTATE STAR POSITIONS (Y then X, with scale) ──
+  const cosY=C(curRotY),sinY=Sf(curRotY);
+  const cosX=C(curRotX),sinX=Sf(curRotX);
+  const sc=curScale;
+  for(let i=0;i<N;i++){
+    const j=i*3,bx=starBase[j],by=starBase[j+1],bz=starBase[j+2];
+    const ry_x=cosY*bx+sinY*bz;
+    const ry_z=-sinY*bx+cosY*bz;
+    starPos[j]=ry_x*sc;
+    starPos[j+1]=(cosX*by-sinX*ry_z)*sc;
+    starPos[j+2]=(sinX*by+cosX*ry_z)*sc;
+  }
+  starGeo.attributes.position.needsUpdate=true;
+
+  for(let i=0;i<NVOL;i++){
+    const j=i*3,bx=volBase[j],by=volBase[j+1],bz=volBase[j+2];
+    const ry_x=cosY*bx+sinY*bz;
+    const ry_z=-sinY*bx+cosY*bz;
+    volPos[j]=ry_x*sc;
+    volPos[j+1]=(cosX*by-sinX*ry_z)*sc;
+    volPos[j+2]=(sinX*by+cosX*ry_z)*sc;
+  }
+  volGeo.attributes.position.needsUpdate=true;
+
+  // ── STAR COLORS ──
+  const pA=starGeo.attributes.position.array,pC=starGeo.attributes.color.array;
+  const capturedSet=new Set(constellation.map(s=>s.index));
+  for(let i=0;i<N;i++){
+    const j=i*3;
+    if(i===targetStar){
+      // Targeted star: bright warm glow
+      const pulse=1+M.sin(now*.02)*.3;
+      pC[j]=lerp(pC[j],.85*pulse,10*dt);
+      pC[j+1]=lerp(pC[j+1],.55*pulse,10*dt);
+      pC[j+2]=lerp(pC[j+2],.15*pulse,10*dt);
+    }else if(capturedSet.has(i)){
+      // Captured: bright cyan
+      pC[j]=lerp(pC[j],.2,5*dt);
+      pC[j+1]=lerp(pC[j+1],.8,5*dt);
+      pC[j+2]=lerp(pC[j+2],1,5*dt);
+    }else{
+      // Restore base color
+      pC[j]=lerp(pC[j],starBaseCol[j],2*dt);
+      pC[j+1]=lerp(pC[j+1],starBaseCol[j+1],2*dt);
+      pC[j+2]=lerp(pC[j+2],starBaseCol[j+2],2*dt);
+    }
+  }
+  starGeo.attributes.color.needsUpdate=true;
+
+  // ── GLOW AT TARGET ──
+  if(targetStar>=0){
+    const j=targetStar*3;
+    glowPts.position.set(pA[j],pA[j+1],pA[j+2]);
+    glowMat.opacity=lerp(glowMat.opacity,.7+.2*M.sin(now*.025),8*dt);
+  }else{
+    glowMat.opacity=lerp(glowMat.opacity,0,5*dt);
+  }
+
+  starMat.size=lerp(starMat.size,.06+captureFlash*.12,8*dt);
+
+  // ── SHOOTING STARS ──
+  shootTimer-=dt;
+  if(shootTimer<=0){spawnShoot();shootTimer=2+Rn()*6;}
+  for(const s of shootPool){
+    if(!s.alive)continue;
+    s.life-=dt;
+    s.pos.x+=s.vel.x*dt;s.pos.y+=s.vel.y*dt;s.pos.z+=s.vel.z*dt;
+    s.trail.unshift(s.pos.clone());
+    if(s.trail.length>25)s.trail.length=25;
+    for(let i=0;i<25;i++){
+      const j=i*3;
+      if(i<s.trail.length){
+        const p=s.trail[i];
+        s.tPos[j]=p.x;s.tPos[j+1]=p.y;s.tPos[j+2]=p.z;
+        const fade=1-i/s.trail.length;
+        s.tCol[j]=1;s.tCol[j+1]=.9*fade;s.tCol[j+2]=.7*fade;
+      }else{s.tPos[j]=0;s.tPos[j+1]=-99;s.tPos[j+2]=0;s.tCol[j]=0;s.tCol[j+1]=0;s.tCol[j+2]=0;}
+    }
+    s.geo.attributes.position.needsUpdate=true;
+    s.geo.attributes.color.needsUpdate=true;
+    s.mat.opacity=s.life/s.maxLife;
+    if(s.life<=0){s.alive=false;s.mat.opacity=0;s.trail=[];}
+  }
+
+  // ── NEBULA ──
+  nebPts.rotation.y+=dt*.04;
+  nebPts.rotation.x+=dt*.015;
+
+  // ── STATUS ──
+  if(!camOK){
+    S.className='';S.textContent='Camera not connected';
+  }else if(ho){
+    S.className='on';
+    const mode=constellation.length>0?'Constellation '+constellation.length:'Stars';
+    const icon=fcCache>=5?'\u{1F590}':fcCache>=3?'\u{1F596}':fcCache>=2?'\u{270C}':fcCache>=1?'\u{261D}':'\u{270A}';
+    S.textContent=mode+' '+icon+' ('+fps+'fps)';
+  }else{S.className='';S.textContent='Waiting for hand... ('+fps+'fps)';}
+
+  // ── RENDER ──
+  bloom.strength=1.1+captureFlash*1.5;
+  comp.render();
+}
+
+// ═══════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════
+let camOK=false;
+
+function showErr(msg){ERR.textContent=msg;ERR.style.display='block';RETRY.style.display='block';}
+function hideErr(){ERR.style.display='none';RETRY.style.display='none';}
+
+async function loadModel(){
+  const {HandLandmarker,FilesetResolver}=await import('./vision_bundle.mjs');
+  const v=await FilesetResolver.forVisionTasks('./wasm');
+  hl=await HandLandmarker.createFromOptions(v,{
+    baseOptions:{modelAssetPath:'./hand_landmarker.task',delegate:'GPU'},
+    runningMode:'VIDEO',numHands:1,
+    minHandDetectionConfidence:.55,minTrackingConfidence:.5
+  });
+}
+
+async function startCam(){
+  camOK=false;
+  stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'user'}});
+  cam.srcObject=stream;
+  await cam.play();
+  if(cam.readyState<2){
+    await new Promise((res,rej)=>{
+      cam.addEventListener('canplay',res,{once:true});
+      setTimeout(()=>rej(new Error('Camera timeout')),8000);
+    });
+  }
+  camOK=true;
+}
+
+function stopCam(){camOK=false;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}}
+
+async function retryCam(){
+  hideErr();stopCam();
+  Ld.classList.remove('done');
+  Lt.textContent='Starting camera...';
+  try{
+    await startCam();
+    if(camOK){Lt.textContent='Ready!';hideErr();setTimeout(()=>Ld.classList.add('done'),600);}
+    else{Lt.textContent='Camera failed';showErr('Cannot access camera\nCheck browser permissions and retry');setTimeout(()=>Ld.classList.add('done'),1000);}
+  }catch(e){
+    Lt.textContent='Camera failed';
+    showErr('Camera error: '+e.message.slice(0,50)+'\nCheck permissions and retry');
+    setTimeout(()=>Ld.classList.add('done'),1000);
+  }
+}
+
+async function initMP(){
+  try{Lt.textContent='Loading model...';await loadModel();Lt.textContent='Model OK';}
+  catch(e){Lt.textContent='Model failed';showErr('Model load failed: '+e.message.slice(0,60));setTimeout(()=>Ld.classList.add('done'),2000);return;}
+  Lt.textContent='Starting camera...';
+  try{await startCam();}
+  catch(e){Lt.textContent='Camera failed';showErr('Cannot access camera\nCheck permissions and retry');setTimeout(()=>Ld.classList.add('done'),1000);return;}
+  if(!camOK){Lt.textContent='Camera failed';showErr('Cannot access camera\nCheck permissions and retry');setTimeout(()=>Ld.classList.add('done'),1000);return;}
+  Lt.textContent='Ready!';hideErr();setTimeout(()=>Ld.classList.add('done'),600);
+}
+
+// ── Events ──
+addEventListener('resize',()=>{ren.setSize(innerWidth,innerHeight);comp.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();});
+addEventListener('keydown',e=>{if(e.key==='d')D.style.display=D.style.display==='none'?'block':'none';if(e.key==='h')H.style.display=H.style.display==='none'?'block':'none';});
+addEventListener('beforeunload',stopCam);
+RETRY.addEventListener('click',retryCam);
+
+initMP();tick();
+</script>
+</body>
+</html>

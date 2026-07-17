@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>粒子宇宙</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;font-family:sans-serif}
+canvas{display:block}
+#pip{position:fixed;bottom:20px;right:20px;width:160px;height:120px;z-index:10;border-radius:10px;border:1px solid rgba(255,255,255,.15);transform:scaleX(-1);object-fit:cover;opacity:.8}
+#s{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10;pointer-events:none;padding:6px 16px;border-radius:12px;font-size:13px;text-align:center;color:rgba(255,255,255,.25);background:rgba(0,0,0,.3);backdrop-filter:blur(8px);transition:all .4s}
+#s.on{color:rgba(255,255,255,.8)}
+#h{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);z-index:10;pointer-events:none;color:rgba(255,255,255,.18);font-size:12px}
+#l{position:fixed;inset:0;z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .5s}
+#l.done{opacity:0;pointer-events:none}
+#l .r{width:30px;height:30px;border:2px solid rgba(255,255,255,.08);border-top-color:rgba(140,100,255,.7);border-radius:50%;animation:sp .8s linear infinite;margin-bottom:14px}
+@keyframes sp{to{transform:rotate(360deg)}}
+#l .t{color:rgba(255,255,255,.22);font-size:13px;font-family:monospace}
+#d{position:fixed;top:4px;left:4px;z-index:20;color:#0f0;font:10px monospace;pointer-events:none;line-height:1.4;background:rgba(0,0,0,.5);padding:4px 8px;border-radius:4px}
+</style>
+</head>
+<body>
+<video id="pip" autoplay playsinline muted></video>
+<div id="s">等待手势…</div>
+<div id="h">🖐 张握缩放 &nbsp; ☜☞ 旋转 &nbsp; ☝️ 一指→奇点 &nbsp; ✌️ 两指→星系</div>
+<div id="l"><div class="r"></div><div class="t" id="lt">初始化…</div></div>
+<div id="d"></div>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+</script>
+
+<script type="module">
+import * as T from 'three';
+import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
+import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
+import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+const S=document.getElementById('s'),Ld=document.getElementById('l'),Lt=document.getElementById('lt'),cam=document.getElementById('pip'),D=document.getElementById('d');
+const M=Math,P=M.PI,C=M.cos,Sf=M.sin,Sq=M.sqrt,Ab=M.abs,Rn=M.random,At=M.atan2;
+
+function lerp(a,b,t){return a+(b-a)*t}
+function hsl(h,s,l){const c=new T.Color();c.setHSL(h,s,l);return c}
+
+// ── Renderer ──────────────────────────────────────────────────
+const ren=new T.WebGLRenderer({antialias:false});
+ren.setPixelRatio(M.min(devicePixelRatio,2));
+ren.setSize(innerWidth,innerHeight);
+ren.domElement.style.background='radial-gradient(ellipse at center,#0a0a2e 0%,#030310 40%,#010108 100%)';
+document.body.prepend(ren.domElement);
+
+const scene=new T.Scene();scene.background=new T.Color(0x030310);
+const camera=new T.PerspectiveCamera(50,innerWidth/innerHeight,.5,50);
+camera.position.set(0,.3,8);camera.lookAt(0,0,0);
+
+const comp=new EffectComposer(ren);
+comp.addPass(new RenderPass(scene,camera));
+const bloom=new UnrealBloomPass(new T.Vector2(innerWidth,innerHeight),1.2,.35,.5);
+comp.addPass(bloom);
+
+// ── Sprite ────────────────────────────────────────────────────
+function mkSprite(sz){
+  const c=document.createElement('canvas');c.width=sz;c.height=sz;
+  const x=c.getContext('2d'),g=x.createRadialGradient(sz/2,sz/2,0,sz/2,sz/2,sz/2);
+  g.addColorStop(0,'#fff');g.addColorStop(.04,'rgba(255,255,255,.97)');
+  g.addColorStop(.15,'rgba(255,255,255,.4)');g.addColorStop(.45,'rgba(255,255,255,.03)');
+  g.addColorStop(1,'transparent');x.fillStyle=g;x.fillRect(0,0,sz,sz);
+  return new T.CanvasTexture(c);
+}
+const sprite=mkSprite(128);
+
+function mkGeo(p,c){const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(p,3));g.setAttribute('color',new T.BufferAttribute(c,3));return g}
+
+const N=2800,IN=500,R0=3,DISC_R=5.5;
+
+// ═══════════════════════════════════════════════════════════════
+// DEEP SPACE BACKGROUND — nebula + distant stars
+// ═══════════════════════════════════════════════════════════════
+const BG=1200;
+const bgPos=new Float32Array(BG*3),bgCol=new Float32Array(BG*3);
+for(let i=0;i<BG;i++){
+  const j=i*3;
+  // Distribute on a large spherical shell
+  const th=Rn()*P*2,ph=M.acos(2*Rn()-1),r=8+Rn()*20;
+  bgPos[j]=r*Sf(ph)*C(th);bgPos[j+1]=r*Sf(ph)*Sf(th);bgPos[j+2]=r*C(ph);
+  // Color: mostly cool blue-white with occasional warm stars
+  const h=Rn()<.8?.55+Rn()*.2:(Rn()<.5?.1+Rn()*.1:.65+Rn()*.1);
+  const s=.3+Rn()*.4,l=.3+Rn()*.5;
+  const c=hsl(h,s,l);
+  bgCol[j]=c.r;bgCol[j+1]=c.g;bgCol[j+2]=c.b;
+}
+const bgGeo=mkGeo(bgPos,bgCol);
+const bgPts=new T.Points(bgGeo,new T.PointsMaterial({size:.04,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.7}));
+bgPts.renderOrder=-1;bgPts.material.depthTest=false;
+scene.add(bgPts);
+
+// ═══════════════════════════════════════════════════════════════
+// SPHERE — Fibonacci lattice
+// ═══════════════════════════════════════════════════════════════
+const spPos=new Float32Array(N*3),spCol=new Float32Array(N*3);
+{
+  const φ=P*(3-Sq(5));
+  for(let i=0;i<N;i++){
+    const y=1-2*i/(N-1),r=Sq(1-y*y)*R0,th=φ*i,j=i*3;
+    spPos[j]=C(th)*r;spPos[j+1]=y*R0;spPos[j+2]=Sf(th)*r;
+    const c=hsl(.6+Rn()*.12,1,.4+Rn()*.38);
+    spCol[j]=c.r;spCol[j+1]=c.g;spCol[j+2]=c.b;
+  }
+}
+const sGeo=mkGeo(spPos,spCol);
+const sMat=new T.PointsMaterial({size:.09,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
+const sPts=new T.Points(sGeo,sMat);
+
+// Inner particles
+const ipPos=new Float32Array(IN*3),ipCol=new Float32Array(IN*3);
+for(let i=0;i<IN;i++){
+  const r=R0*M.cbrt(Rn()),th=Rn()*P*2,ph=M.acos(2*Rn()-1),j=i*3;
+  ipPos[j]=r*Sf(ph)*C(th);ipPos[j+1]=r*Sf(ph)*Sf(th);ipPos[j+2]=r*C(ph);
+  const c=hsl(.6+Rn()*.12,1,.35+Rn()*.32);
+  ipCol[j]=c.r;ipCol[j+1]=c.g;ipCol[j+2]=c.b;
+}
+const iGeo=mkGeo(ipPos,ipCol);
+const iMat=new T.PointsMaterial({size:.05,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
+const iPts=new T.Points(iGeo,iMat);
+
+const grp=new T.Group();grp.add(sPts);grp.add(iPts);scene.add(grp);
+
+// ═══════════════════════════════════════════════════════════════
+// GALAXY — spiral disc with core bulge + arms
+// ═══════════════════════════════════════════════════════════════
+// We precompute a beautiful spiral galaxy shape
+const galPos=new Float32Array(N*3),galCol=new Float32Array(N*3);
+const galIPos=new Float32Array(IN*3),galICol=new Float32Array(IN*3);
+{
+  // Galaxy parameters
+  const ARMS=4;
+  const ARM_ANGLE=P*2/ARMS;  // 90° between arms
+  const ARM_TWIST=4.5;        // how much each arm winds
+  const BULGE_R=1.2;          // central bulge radius
+
+  for(let i=0;i<N;i++){
+    const j=i*3;
+    // Sample in disc (r,θ)
+    const rawR=Rn();
+    const rr=M.pow(rawR,.55)*DISC_R; // exponential-ish radial profile
+    const a=Rn()*P*2;
+
+    // Which arm is closest?
+    const armIdx=M.floor(Rn()*ARMS);
+    const armBase=armIdx*ARM_ANGLE;
+    // Spiral arm: angular offset increases with radius
+    const armAng=a-armBase;
+    const spiralOffset=rr/DISC_R*ARM_TWIST;
+    // Distance from spiral arm center line
+    const dArm=Ab(M.sin(armAng-spiralOffset)*rr);
+    const armWidth=.4+rr*.15;
+
+    // Combine: arm dust lane + disc scatter + bulge
+    const inArm=dArm<armWidth;
+    let r,th;
+    if(inArm&&Rn()<.7){
+      // Arm particle: on the arm ridge
+      const armPhase=(armAng+spiralOffset+armWidth/dArm*.2)*3;
+      r=rr+Sf(armPhase)*.15*dArm; // slight waviness along arm
+      th=armBase+rr*ARM_TWIST/DISC_R+(Rn()-.5)*armWidth/rr;
+    }else if(rr<BULGE_R){
+      // Bulge particle: spherical-ish near center
+      const br=rr*1.5,bth=Rn()*P*2,bph=M.acos(2*Rn()-1);
+      const brr=(Rn()<.4?rr:br*Sf(bph));
+      const bth2=Rn()*P*2;
+      r=M.pow(Rn(),.5)*rr;
+      th=bth2;
+    }else{
+      // Disc scatter: thin disc
+      r=rr;
+      th=a;
+    }
+
+    // Flatten: galaxy is a thin disc, barely thick
+    const discH=(Rn()-.5)*.25*(1-r/DISC_R);
+    const bulgeH=(Rn()-.5)*.35*M.exp(-r/BULGE_R*2);
+    const h=discH+bulgeH;
+
+    galPos[j]=C(th)*r;
+    galPos[j+1]=h;
+    galPos[j+2]=Sf(th)*r;
+
+    // Color: warm yellow-white core → blue-purple arms
+    const distFrac=r/DISC_R;
+    const coreGlow=M.exp(-distFrac*3);
+    const hue=lerp(.65,lerp(.15+coreGlow*.1,.65,distFrac),coreGlow);
+    const sat=lerp(.5,1,distFrac);
+    const lit=lerp(.7,lerp(.35,.5,distFrac),coreGlow);
+    const c=hsl(hue,sat,lit);
+    galCol[j]=c.r;galCol[j+1]=c.g;galCol[j+2]=c.b;
+  }
+
+  // Inner → concentrated in bulge
+  for(let i=0;i<IN;i++){
+    const j=i*3;
+    const r=M.pow(Rn(),.6)*BULGE_R*1.3,th=Rn()*P*2;
+    galIPos[j]=C(th)*r;
+    galIPos[j+1]=(Rn()-.5)*.15*M.exp(-r/BULGE_R);
+    galIPos[j+2]=Sf(th)*r;
+    const c=hsl(.15+Rn()*.05,.3,.6+Rn()*.25);
+    galICol[j]=c.r;galICol[j+1]=c.g;galICol[j+2]=c.b;
+  }
+}
+
+// Ghosts (sphere-mode only effect)
+const gh=[],gSc=[],gRt=[],gc=[{s:.06,l:.35},{s:.04,l:.18},{s:.03,l:.08}];
+for(let g=0;g<3;g++){
+  const m=new T.PointsMaterial({size:gc[g].s,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
+  const p=new T.Points(sGeo,m);scene.add(p);
+  gh.push(p);gSc.push(1);gRt.push(0);
+}
+
+// Galaxy background disc stars (floating in the same plane)
+const GD=500;
+const gdPos=new Float32Array(GD*3),gdCol=new Float32Array(GD*3);
+const gdGalPos=new Float32Array(GD*3),gdGalCol=new Float32Array(GD*3);
+for(let i=0;i<GD;i++){
+  const j=i*3;
+  // Scattered background dim stars
+  const th=Rn()*P*2,ph=M.acos(2*Rn()-1),r=8+Rn()*14;
+  gdPos[j]=r*Sf(ph)*C(th);gdPos[j+1]=r*Sf(ph)*Sf(th);gdPos[j+2]=r*C(ph);
+  const b=.03+Rn()*.25;gdCol[j]=b;gdCol[j+1]=b;gdCol[j+2]=b;
+  // Galaxy version: same disc, flatter
+  const ga=Rn()*P*2,gr=1.5+Rn()*DISC_R*1.2;
+  const cl=Rn()<.3?hsl(.15,.3,.6+Rn()*.3):hsl(.6+Rn()*.15,.5,.3+Rn()*.35);
+  gdGalPos[j]=C(ga)*gr;gdGalPos[j+1]=(Rn()-.5)*.2*(1-gr/DISC_R);gdGalPos[j+2]=Sf(ga)*gr;
+  gdGalCol[j]=cl.r;gdGalCol[j+1]=cl.g;gdGalCol[j+2]=cl.b;
+}
+const gdGeo=mkGeo(gdPos,gdCol);
+const gdStars=new T.Points(gdGeo,new T.PointsMaterial({size:.05,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.5}));
+scene.add(gdStars);
+
+// Rings
+const rings=[];
+for(let r=0;r<4;r++){
+  const m=new T.MeshBasicMaterial({color:hsl(Rn(),1,.6),blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:0});
+  const mesh=new T.Mesh(new T.TorusGeometry(R0*.9,.03,16,64),m);
+  mesh.rotation.x=P/2;mesh.visible=false;
+  scene.add(mesh);rings.push({mesh,mat:m,alive:false,born:0});
+}
+
+// Velocity
+const vel=new Float32Array(N*3),ivel=new Float32Array(IN*3),gdVel=new Float32Array(GD*3);
+
+// ── State ─────────────────────────────────────────────────────
+let curS=1,tgtS=1,rotV=0,curR=0,ho=false,lh=0,lg=null,po=0,lot=0;
+let uMode=0;         // 0=sphere, 1=point, 2=galaxy
+let uLerp=0,utgt=0;  // smooth lerp
+let gestTime=0;       // last time a finger-count gesture was seen
+// Count extended fingers (tip above PIP)
+function countFingers(lm){
+  const tips=[4,8,12,16,20],pips=[3,6,10,14,18];
+  let c=0;
+  for(let i=0;i<5;i++)if(lm[tips[i]].y<lm[pips[i]].y)c++;
+  return c;
+}
+
+// ── Gesture ───────────────────────────────────────────────────
+function analyze(lm){
+  const w=lm[0],tips=[4,8,12,16,20],pips=[3,6,10,14,18];let ts=0,ps=0;
+  for(let i=0;i<5;i++){ts+=M.hypot(lm[tips[i]].x-w.x,lm[tips[i]].y-w.y);ps+=M.hypot(lm[pips[i]].x-w.x,lm[pips[i]].y-w.y);}
+  return{
+    openness:M.max(0,M.min(1,(ts/M.max(ps,.01)-1.02)/.28)),
+    pointDir:Ab(lm[8].x-lm[9].x)<.015?0:M.max(-1,M.min(1,(lm[8].x-lm[9].x)*18))
+  };
+}
+
+// ── MediaPipe ─────────────────────────────────────────────────
+let hl=null,stream=null,lvt=0;
+async function initMP(){
+  Lt.textContent='加载手势模型…';
+  const {HandLandmarker,FilesetResolver}=await import('./vision_bundle.mjs');
+  const v=await FilesetResolver.forVisionTasks('./wasm');
+  hl=await HandLandmarker.createFromOptions(v,{baseOptions:{modelAssetPath:'./hand_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numHands:1,minHandDetectionConfidence:.55,minTrackingConfidence:.5});
+  Lt.textContent='启动摄像头…';await startCam();
+}
+async function startCam(){
+  try{stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'user'}});cam.srcObject=stream;await cam.play();
+  await new Promise(res=>{if(cam.currentTime>0){res();return;}cam.addEventListener('timeupdate',res,{once:true});});
+  Lt.textContent='就绪';setTimeout(()=>Ld.classList.add('done'),500);}
+  catch(e){Lt.textContent='摄像头不可用 ('+e.message.slice(0,30)+')';setTimeout(()=>Ld.classList.add('done'),2000);}
+}
+function stopCam(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}}
+
+// ═══════════════════════════════════════════════════════════════
+const clk=new T.Clock();
+const NAMES=['🪐 球壳','⚫ 奇点','🌌 星系'];
+
+function tick(){
+  requestAnimationFrame(tick);
+  const dt=M.min(clk.getDelta(),.12),now=performance.now();
+
+  // Detect
+  if(hl&&stream&&cam.currentTime>0&&cam.currentTime!==lvt){
+    lvt=cam.currentTime;
+    try{const res=hl.detectForVideo(cam,now);
+    if(res.landmarks&&res.landmarks.length>0){
+      const lm=res.landmarks[0];
+      const g0=analyze(lm);lg=g0;ho=true;lh=now;
+      const fc=countFingers(lm);
+      const dbg=[`手:1`,`指:${fc}`,`张:${g0.openness.toFixed(2)}`];
+      if(fc===1){gestTime=now;dbg.push('☝️→奇点');if(uMode===0){uMode=1;utgt=.5;}else if(uMode===2){uMode=0;utgt=0;}}
+      else if(fc===2){gestTime=now;dbg.push('✌️→星系');if(uMode===0||uMode===1){uMode=2;utgt=1;}}
+      else{dbg.push('——');}
+      dbg.push('模式:'+uMode,'lerp:'+uLerp.toFixed(2));
+      D.innerHTML=dbg.join('<br>');
+    }else{ho=false;D.innerHTML='无手';}}catch(_){ho=false;D.innerHTML='异常';}
+  }
+  if(uMode!==0&&now-gestTime>2500){uMode=0;utgt=0;}
+  uLerp+=(utgt-uLerp)*2.5*dt;if(Ab(utgt-uLerp)<.001)uLerp=utgt;
+
+  bloom.strength=1.2+M.sin(uLerp*P)*.7;
+
+  // Single-hand
+  if(ho&&lg){const{openness,pointDir}=lg;
+  if(po>.5&&openness<.22&&now-lot<.4){const fr=rings.find(r=>!r.alive);if(fr){fr.alive=true;fr.born=now;fr.mat.color.setHSL(Rn(),1,.6);fr.mat.opacity=.85;fr.mesh.visible=true;fr.mesh.rotation.set(P/2+(Rn()-.5)*.6,0,(Rn()-.5)*.6);}}
+  if(openness>.5)lot=now;po=openness;tgtS=1-openness*.55;rotV=pointDir*(uMode===2?3.5:2.8);
+  const l=openness>.55?'🖐':openness<.22?'✊':'✋';
+  S.textContent=NAMES[uMode]+' · '+l+(pointDir<-.08?'↺':pointDir>.08?'↻':'');
+  S.className='on';}else{tgtS=1;rotV=0;if(now-lh>2000)rotV=uMode===2?.8:.15;
+  S.textContent=uMode===0?'☝️一指→奇点 ✌️两指→星系':NAMES[uMode];S.className=uMode!==0?'on':'';}
+
+  curS+=(tgtS-curS)*3.5*dt;curR+=(rotV-curR)*5*dt;
+  for(let g=0;g<3;g++){gSc[g]+=(curS-gSc[g])*gc[g].l;gRt[g]+=(grp.rotation.y-gRt[g])*gc[g].l;gh[g].scale.setScalar(gSc[g]);gh[g].rotation.y=gRt[g];}
+
+  // ── Positions ──
+  const pA=sGeo.attributes.position.array,pC=sGeo.attributes.color.array;
+  const iA=iGeo.attributes.position.array,iC=iGeo.attributes.color.array;
+  const gdA=gdGeo.attributes.position.array,gdC=gdGeo.attributes.color.array;
+
+  for(let i=0;i<N;i++){const j=i*3;
+    const sx=spPos[j],sy=spPos[j+1],sz=spPos[j+2];
+    const sr=Sq(sx*sx+sy*sy+sz*sz)||.001,nx=sx/sr,ny=sy/sr,nz=sz/sr;
+    const px=nx*sr*.03,py=ny*sr*.03,pz=nz*sr*.03;
+    const gx=galPos[j],gy=galPos[j+1],gz=galPos[j+2];
+    let tx,ty,tz;
+    if(uLerp<=.5){const f=uLerp/.5;tx=lerp(sx,px,f);ty=lerp(sy,py,f);tz=lerp(sz,pz,f);}
+    else{const f=(uLerp-.5)/.5;tx=lerp(px,gx,f);ty=lerp(py,gy,f);tz=lerp(pz,gz,f);}
+    let tcR,tcG,tcB;
+    if(uLerp<=.5){const f=uLerp/.5;tcR=lerp(spCol[j],1,f);tcG=lerp(spCol[j+1],.95,f);tcB=lerp(spCol[j+2],.9,f);}
+    else{const f=(uLerp-.5)/.5;tcR=lerp(1,galCol[j],f);tcG=lerp(.95,galCol[j+1],f);tcB=lerp(.9,galCol[j+2],f);}
+    const k=14,d=7;vel[j]+=((tx-pA[j])*k-vel[j]*d)*dt;pA[j]+=vel[j]*dt;
+    vel[j+1]+=((ty-pA[j+1])*k-vel[j+1]*d)*dt;pA[j+1]+=vel[j+1]*dt;
+    vel[j+2]+=((tz-pA[j+2])*k-vel[j+2]*d)*dt;pA[j+2]+=vel[j+2]*dt;
+    pC[j]=lerp(pC[j],tcR,3*dt);pC[j+1]=lerp(pC[j+1],tcG,3*dt);pC[j+2]=lerp(pC[j+2],tcB,3*dt);
+  }
+  sGeo.attributes.position.needsUpdate=true;sGeo.attributes.color.needsUpdate=true;
+
+  for(let i=0;i<IN;i++){const j=i*3;
+    const sx=ipPos[j],sy=ipPos[j+1],sz=ipPos[j+2];
+    const sr=Sq(sx*sx+sy*sy+sz*sz)||.001,nx=sx/sr,ny=sy/sr,nz=sz/sr;
+    const px=nx*sr*.02,py=ny*sr*.02,pz=nz*sr*.02;
+    const gx=galIPos[j],gy=galIPos[j+1],gz=galIPos[j+2];
+    let tx,ty,tz;
+    if(uLerp<=.5){const f=uLerp/.5;tx=lerp(sx,px,f);ty=lerp(sy,py,f);tz=lerp(sz,pz,f);}
+    else{const f=(uLerp-.5)/.5;tx=lerp(px,gx,f);ty=lerp(py,gy,f);tz=lerp(pz,gz,f);}
+    ivel[j]+=((tx-iA[j])*16-ivel[j]*8)*dt;iA[j]+=ivel[j]*dt;
+    ivel[j+1]+=((ty-iA[j+1])*16-ivel[j+1]*8)*dt;iA[j+1]+=ivel[j+1]*dt;
+    ivel[j+2]+=((tz-iA[j+2])*16-ivel[j+2]*8)*dt;iA[j+2]+=ivel[j+2]*dt;
+    let tcR,tcG,tcB;
+    if(uLerp<=.5){const f=uLerp/.5;tcR=lerp(ipCol[j],1,f);tcG=lerp(ipCol[j+1],.95,f);tcB=lerp(ipCol[j+2],.9,f);}
+    else{const f=(uLerp-.5)/.5;tcR=lerp(1,galICol[j],f);tcG=lerp(.95,galICol[j+1],f);tcB=lerp(.9,galICol[j+2],f);}
+    iC[j]=lerp(iC[j],tcR,3*dt);iC[j+1]=lerp(iC[j+1],tcG,3*dt);iC[j+2]=lerp(iC[j+2],tcB,3*dt);
+  }
+  iGeo.attributes.position.needsUpdate=true;iGeo.attributes.color.needsUpdate=true;
+
+  // Galaxy disc stars
+  for(let i=0;i<GD;i++){const j=i*3;
+    let tx,ty,tz;
+    if(uLerp<=.5){const f=uLerp/.5;tx=lerp(gdPos[j],gdPos[j]*.3,f);ty=lerp(gdPos[j+1],gdPos[j+1]*.3,f);tz=lerp(gdPos[j+2],gdPos[j+2]*.3,f);}
+    else{const f=(uLerp-.5)/.5;tx=lerp(gdPos[j]*.3,gdGalPos[j],f);ty=lerp(gdPos[j+1]*.3,gdGalPos[j+1],f);tz=lerp(gdPos[j+2]*.3,gdGalPos[j+2],f);}
+    gdVel[j]+=((tx-gdA[j])*5-gdVel[j]*4)*dt;gdA[j]+=gdVel[j]*dt;
+    gdVel[j+1]+=((ty-gdA[j+1])*5-gdVel[j+1]*4)*dt;gdA[j+1]+=gdVel[j+1]*dt;
+    gdVel[j+2]+=((tz-gdA[j+2])*5-gdVel[j+2]*4)*dt;gdA[j+2]+=gdVel[j+2]*dt;
+    if(uLerp>.3){const f=(uLerp-.3)/.7;gdC[j]=lerp(gdCol[j],gdGalCol[j],f);gdC[j+1]=lerp(gdCol[j+1],gdGalCol[j+1],f);gdC[j+2]=lerp(gdCol[j+2],gdGalCol[j+2],f);}
+    else{gdC[j]=gdCol[j];gdC[j+1]=gdCol[j+1];gdC[j+2]=gdCol[j+2];}
+  }
+  gdGeo.attributes.position.needsUpdate=true;gdGeo.attributes.color.needsUpdate=true;
+
+  // Transform
+  grp.scale.setScalar(curS);grp.rotation.y+=curR*dt;
+  if(uLerp>.4)grp.rotation.x=lerp(grp.rotation.x,P*.12,2*dt);else grp.rotation.x=lerp(grp.rotation.x,0,2*dt);
+  for(let g=0;g<3;g++)gh[g].rotation.x=grp.rotation.x;
+  gdStars.rotation.y+=dt*(uLerp>.3?curR*.25:.01);
+  bgPts.rotation.y-=dt*.015;
+
+  for(const r of rings){if(!r.alive)continue;const ag=(now-r.born)/1000;if(ag>1.2){r.alive=false;r.mesh.visible=false;r.mat.opacity=0;continue;}r.mesh.scale.setScalar(curS+ag/1.2*3);r.mat.opacity=(1-ag/1.2)*.7;}
+
+  comp.render();
+}
+
+addEventListener('resize',()=>{ren.setSize(innerWidth,innerHeight);comp.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();});
+addEventListener('beforeunload',stopCam);initMP();tick();
+</script>
+</body>
+</html>
