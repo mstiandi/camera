@@ -808,22 +808,20 @@ function tick(){
   // ═══════════════════════════════════════════════════════════════
   if(state===States.SPHERE){
     // Camera pierces through outer shell toward inner core
-    // hand open → camera forward (penetrate), closed → back (outside)
-    const tgtZ=6.5-openness*6.1; // closed=6.5 outside, fully open=0.4 near core
-    camera.position.z=lerp(camera.position.z,tgtZ,4*dt);
-    // Outer sphere fixed scale, slight drift
+    // hand open → rush forward through outer sphere into ring zone
+    const tgtZ=6.5-M.pow(openness,1.5)*7.5; // closed=6.5, half-open=4.2, full=-1.0 (past core)
+    camera.position.z=lerp(camera.position.z,tgtZ,12*dt);
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
-    // Closer → brighter core
-    const close=M.max(0,1-(camera.position.z/3));
-    cMat.opacity=lerp(cMat.opacity,.7+close*.3,3*dt);
+    const close=M.max(0,1-(camera.position.z/2.5));
+    cMat.opacity=lerp(cMat.opacity,.7+close*.3,5*dt);
     if(handPresent){
       grp.rotation.y+=pointDir*1.5*dt;
       corePts.rotation.y+=pointDir*.8*dt;
     }else{
       grp.rotation.y+=dt*.2;
       corePts.rotation.y+=dt*.1;
-      camera.position.z=lerp(camera.position.z,6.5,1.5*dt);
+      camera.position.z=lerp(camera.position.z,6.5,2*dt);
     }
     const sName='🔮 光球';
     if(handPresent){
