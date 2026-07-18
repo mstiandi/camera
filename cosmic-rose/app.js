@@ -43,7 +43,7 @@ document.body.prepend(ren.domElement);
 
 const scene=new T.Scene();scene.background=new T.Color(0x010108);
 const camera=new T.PerspectiveCamera(50,innerWidth/innerHeight,.5,50);
-camera.position.set(0,.7,6.5);camera.lookAt(0,1.05,0);
+camera.position.set(0,0,6.5);camera.lookAt(0,0,0);
 
 const comp=new EffectComposer(ren);
 comp.addPass(new RenderPass(scene,camera));
@@ -136,7 +136,8 @@ const treePos=new Float32Array(N*3),treeCol=new Float32Array(N*3);
     treePos[j]=rr*M.sin(phi)*M.cos(th);
     treePos[j+1]=rr*M.sin(phi)*M.sin(th);
     treePos[j+2]=rr*M.cos(phi);
-    const c=hsl(.12+Rn()*.04,.3+Rn()*.3,.55+Rn()*.35);
+    const hue=[.55,.65,.72,.08,.15,.22][M.floor(Rn()*6)]+(Rn()-.5)*.04;
+    const c=hsl(hue,.5+Rn()*.4,.5+Rn()*.4);
     treeCol[j]=c.r;treeCol[j+1]=c.g;treeCol[j+2]=c.b;
   }
 }
@@ -154,14 +155,14 @@ for(let i=0;i<N;i++){
 // ── Geometry ────────────────────────────────────────────────────
 function mkGeo(p,c){const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(p,3));g.setAttribute('color',new T.BufferAttribute(c,3));return g}
 const pGeo=mkGeo(pos,col);
-const pMat=new T.PointsMaterial({size:.028,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
+const pMat=new T.PointsMaterial({size:.06,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
 const pts=new T.Points(pGeo,pMat);
 const grp=new T.Group();grp.add(pts);scene.add(grp);
 
 // ── Ghost trails ────────────────────────────────────────────────
 const ghosts=[];
 for(let g=0;g<2;g++){
-  const m=new T.PointsMaterial({size:.014-.004*g,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.35-g*.15});
+  const m=new T.PointsMaterial({size:.04-.01*g,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.35-g*.15});
   const p=new T.Points(pGeo,m);scene.add(p);
   ghosts.push(p);
 }
