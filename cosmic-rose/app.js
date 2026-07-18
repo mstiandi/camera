@@ -804,21 +804,21 @@ function tick(){
   if(state===States.SPHERE){
     // Heavy EMA: ~1.5s to respond, kills frame-level jitter completely
     // Binary keyframe: open→ring, closed→outside, lerp transition
-    const tgtZ=openness>.35?.6:7.5;
-    const tgtOp=openness>.35?.4:.88;
-    const tgtCoreOp=openness>.35?.92:.7;
+    const inRing=openness>.14||handPresent&&openness>.08;
+    const tgtZ=inRing?.6:7.5;
+    const tgtOp=inRing?.32:.88;
+    const tgtCoreOp=inRing?.95:.62;
     camera.position.z=lerp(camera.position.z,tgtZ,5*dt);
-    pMat.opacity=lerp(pMat.opacity,tgtOp,4*dt);
-    cMat.opacity=lerp(cMat.opacity,tgtCoreOp,4*dt);
+    pMat.opacity=lerp(pMat.opacity,tgtOp,3*dt);
+    cMat.opacity=lerp(cMat.opacity,tgtCoreOp,3*dt);
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
     if(handPresent){
       grp.rotation.y+=pointDir*2.5*dt;
       corePts.rotation.y+=pointDir*1.2*dt;
     }else{
-      grp.rotation.y+=(-grp.rotation.y*.5)*dt;
-      corePts.rotation.y+=(-corePts.rotation.y*.5)*dt;
-      camera.position.z=lerp(camera.position.z,7.5,3*dt);
+      grp.rotation.y+=(-grp.rotation.y*.3)*dt;
+      corePts.rotation.y+=(-corePts.rotation.y*.3)*dt;
     }
     const sName='🔮 光球';
     if(handPresent){
