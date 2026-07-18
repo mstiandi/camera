@@ -804,7 +804,7 @@ function tick(){
   if(state===States.SPHERE){
     // Heavy EMA: ~1.5s to respond, kills frame-level jitter completely
     // Binary keyframe: open→ring, closed→outside, lerp transition
-    const inRing=openness>.28;
+    const inRing=openness>.22;
     const tgtZ=inRing?.6:7.5;
     const tgtOp=inRing?.3:.88;
     const tgtCoreOp=inRing?.95:.6;
