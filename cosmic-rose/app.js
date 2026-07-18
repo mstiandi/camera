@@ -810,9 +810,8 @@ function tick(){
   if(state===States.SPHERE){
     // Camera pierces through outer shell toward inner core
     // hand open → rush forward through outer sphere into ring zone
-    // Linear ramp: openness*12, clamped to stop in ring zone (not inside core)
-    const rawZ=6.5-openness*12; // o=0.5→0.5(ring), o=0.4→1.7, o=0.3→2.9
-    const tgtZ=M.max(.4,M.min(rawZ,6.5)); // never past ring zone, never inside core
+    const rawZ=6.5-openness*12;
+    const tgtZ=M.max(.4,M.min(rawZ,6.5));
     camera.position.z=lerp(camera.position.z,tgtZ,15*dt);
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
