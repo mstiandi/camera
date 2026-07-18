@@ -802,30 +802,28 @@ function tick(){
     ghosts[g].scale.copy(grp.scale);
     ghosts[g].material.opacity=(state===States.PULSING?.25:.2)-g*.08;
   }
-  // Core ghost rotation sync
-  if(state===States.SPHERE){
-    corePts.rotation.y=lerp(corePts.rotation.y,grp.rotation.y*.5,2*dt);
-  }
 
   // ═══════════════════════════════════════════════════════════════
   // SPHERE interactions
   // ═══════════════════════════════════════════════════════════════
   if(state===States.SPHERE){
+    // Camera pierces through outer shell toward inner core
+    // hand open → camera forward (penetrate), closed → back (outside)
+    const tgtZ=6.5-openness*6.1; // closed=6.5 outside, fully open=0.4 near core
+    camera.position.z=lerp(camera.position.z,tgtZ,4*dt);
+    // Outer sphere fixed scale, slight drift
+    grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
+    corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
+    // Closer → brighter core
+    const close=M.max(0,1-(camera.position.z/3));
+    cMat.opacity=lerp(cMat.opacity,.7+close*.3,3*dt);
     if(handPresent){
-      // Outer sphere: open hand → balloons out (pass through it)
-      const outerScale=.7+openness*3.8; // closed=0.7x, open=4.5x
-      grp.scale.lerp(new T.Vector3(outerScale,outerScale,outerScale),8*dt);
-      // Inner core: stays stable, slight glow pulse with openness
-      const coreScale=.85+openness*.35; // 0.85~1.2
-      corePts.scale.lerp(new T.Vector3(coreScale,coreScale,coreScale),6*dt);
-      cMat.opacity=lerp(cMat.opacity,.75+openness*.25,4*dt);
       grp.rotation.y+=pointDir*1.5*dt;
       corePts.rotation.y+=pointDir*.8*dt;
     }else{
       grp.rotation.y+=dt*.2;
       corePts.rotation.y+=dt*.1;
-      grp.scale.lerp(new T.Vector3(1,1,1),1.5*dt);
-      corePts.scale.lerp(new T.Vector3(1,1,1),1.5*dt);
+      camera.position.z=lerp(camera.position.z,6.5,1.5*dt);
     }
     const sName='🔮 光球';
     if(handPresent){
