@@ -804,10 +804,10 @@ function tick(){
   if(state===States.SPHERE){
     // Heavy EMA: ~1.5s to respond, kills frame-level jitter completely
     // Binary keyframe: open→ring, closed→outside, lerp transition
-    const inRing=openness>.14||handPresent&&openness>.08;
+    const inRing=openness>.28;
     const tgtZ=inRing?.6:7.5;
-    const tgtOp=inRing?.32:.88;
-    const tgtCoreOp=inRing?.95:.62;
+    const tgtOp=inRing?.3:.88;
+    const tgtCoreOp=inRing?.95:.6;
     camera.position.z=lerp(camera.position.z,tgtZ,5*dt);
     pMat.opacity=lerp(pMat.opacity,tgtOp,3*dt);
     cMat.opacity=lerp(cMat.opacity,tgtCoreOp,3*dt);
