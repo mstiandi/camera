@@ -127,135 +127,178 @@ const hPos=new Float32Array(NHALO*3),hCol=new Float32Array(NHALO*3);
   }
 }
 
-// Compute tree shape — WINDING ROOTS + BRANCH CANOPY ──────────
+// Compute tree shape — PURE STRUCTURE: roots + trunk + branches + foliage
 {
   const yc=(y,hue0,hue1,sat0,sat1,lit0,lit1)=>{
     const t=M.min(1,y/2.7),h=lerp(hue0,hue1,t);
     const c=hsl(h,lerp(sat0,sat1,t),lerp(lit0,lit1,t));
     return[c.r,c.g,c.b];
   };
-  // Sample a point with thickness around a line segment ──────
-  const sp=(ax,ay,az,bx,by,bz,t,rad)=>{
-    const x0=lerp(ax,bx,t),y0=lerp(ay,by,t),z0=lerp(az,bz,t);
-    const dx=bx-ax,dy=by-ay,dz=bz-az,len=Sq(dx*dx+dy*dy+dz*dz)||.001;
-    const nx=dx/len,ny=dy/len,nz=dz/len;
+  const col=(y,h0,h1,s0,s1,l0,l1)=>yc(y,h0,h1,s0,s1,l0,l1);
+
+  // Cubic bezier 3D ──────────────────────────────────────────
+  const b3=(t,p0,p1,p2,p3)=>{const u=1-t;return[
+    u*u*u*p0[0]+3*u*u*t*p1[0]+3*u*t*t*p2[0]+t*t*t*p3[0],
+    u*u*u*p0[1]+3*u*u*t*p1[1]+3*u*t*t*p2[1]+t*t*t*p3[1],
+    u*u*u*p0[2]+3*u*u*t*p1[2]+3*u*t*t*p2[2]+t*t*t*p3[2]];};
+
+  // Quadratic bezier 3D ──────────────────────────────────────
+  const b2=(t,p0,p1,p2)=>{const u=1-t;return[
+    u*u*p0[0]+2*u*t*p1[0]+t*t*p2[0],
+    u*u*p0[1]+2*u*t*p1[1]+t*t*p2[1],
+    u*u*p0[2]+2*u*t*p1[2]+t*t*p2[2]];};
+
+  // Fill a tube segment at curve point with thickness ───────
+  const tubePoint=(cp,rad)=>{
     const ang=Rn()*P*2,ca=M.cos(ang),sa=M.sin(ang);
-    const rx=M.abs(ny)>.99?1:0,ry=M.abs(ny)>.99?0:1,rz=0;
-    const p1x=ry*nz,p1y=rz*nx-rx*nz,p1z=rx*ny-ry*nx;
-    const p1l=Sq(p1x*p1x+p1y*p1y+p1z*p1z)||.001;
-    const ux=p1x/p1l,uy=p1y/p1l,uz=p1z/p1l;
-    const vx=ny*uz-nz*uy,vy=nz*ux-nx*uz,vz=nx*uy-ny*ux;
     const rr=Sq(Rn())*rad;
-    return{x:x0+rr*(ca*ux+sa*vx),y:y0+rr*(ca*uy+sa*vy),z:z0+rr*(ca*uz+sa*vz)};
+    return{x:cp[0]+rr*ca,y:cp[1]+rr*sa*.35,z:cp[2]+rr*ca};
   };
+
   let ki=0;
-  const setP=(i,x,y,z,col)=>{const j=i*3;treePos[j]=x;treePos[j+1]=y;treePos[j+2]=z;treeCol[j]=col[0];treeCol[j+1]=col[1];treeCol[j+2]=col[2];};
+  const setP=(x,y,z,cr,cg,cb)=>{const j=ki*3;treePos[j]=x;treePos[j+1]=y;treePos[j+2]=z;treeCol[j]=cr;treeCol[j+1]=cg;treeCol[j+2]=cb;};
 
-  // ── WINDING ROOTS: 8 long snaking arches ────────────────────
-  for(let r=0;r<8;r++){
-    const baseAng=r/8*P*2+(Rn()-.5)*.18;
-    const segs=4+M.floor(Rn()*3); // 4-6 segments per root
-    const nodes=[{x:0,y:.05,z:0}];
-    let cx=0,cy=.05,cz=0;
-    let ang=baseAng,len=.15+Rn()*.12,drop=.03+Rn()*.05;
-    for(let s=0;s<segs;s++){
-      ang+=(Rn()-.5)*.35; len+=.08+Rn()*.12; drop=M.min(drop+.05+Rn()*.06,.4);
-      cx+=C(ang)*len; cy=M.max(cy-drop,.08-drop); cz+=Sf(ang)*len;
-      nodes.push({x:cx,y:cy,z:cz});
-    }
-    // Sample along the polyline with thickness
-    for(let k=0;k<450;k++){
-      const t=Rn(),segIdx=M.min(M.floor(t*(nodes.length-1)),nodes.length-2);
-      const a=nodes[segIdx],b=nodes[segIdx+1];
-      const pt=sp(a.x,a.y,a.z,b.x,b.y,b.z,(t*(nodes.length-1)-segIdx),.06*(1-t)*.8);
-      const c=yc(M.max(.01,pt.y),38/360,41/360,.36,.46,.46,.62);
-      setP(ki,pt.x,pt.y,pt.z,c);ki++;
+  // ══════ SMOOTH ROOTS: 10 cubic beziers ════════════════════
+  const rootDefs=[
+    {az:0,   len:.9, drop:.5,  cpOut:.25, cpUp:.08},
+    {az:.4,  len:1.0,drop:.55, cpOut:.3,  cpUp:.06},
+    {az:.8,  len:.85,drop:.48, cpOut:.22, cpUp:.1},
+    {az:1.2, len:1.1,drop:.6,  cpOut:.35, cpUp:.05},
+    {az:1.6, len:.95,drop:.52, cpOut:.28, cpUp:.07},
+    {az:2.0, len:1.05,drop:.58,cpOut:.32, cpUp:.04},
+    {az:2.4, len:.8, drop:.45, cpOut:.2,  cpUp:.09},
+    {az:2.8, len:1.15,drop:.62,cpOut:.38, cpUp:.03},
+    {az:3.2, len:.9, drop:.5,  cpOut:.26, cpUp:.08},
+    {az:3.6, len:1.0,drop:.55, cpOut:.3,  cpUp:.06},
+  ];
+  for(const rd of rootDefs){
+    const az=rd.az+(Rn()-.5)*.12;
+    // Control points for smooth arching root
+    const p0=[0,.04,0];
+    const p1=[C(az)*rd.len*.25, .04-rd.drop*.15, Sf(az)*rd.len*.25];
+    const p2=[C(az)*rd.len*.65, .04-rd.drop*.7, Sf(az)*rd.len*.65];
+    const p3=[C(az)*rd.len, .04-rd.drop, Sf(az)*rd.len];
+    for(let k=0;k<500;k++){
+      const t=Rn(),cp=b3(t,p0,p1,p2,p3);
+      const rad=lerp(.065,.01,t)*.75;
+      const pt=tubePoint(cp,rad);
+      const c=col(M.max(.01,cp[1]),38/360,41/360,.36,.46,.46,.60);
+      setP(pt.x,pt.y,pt.z,c[0],c[1],c[2]);ki++;
     }
   }
 
-  // ── TRUNK: filled cylinder, slight taper ────────────────────
-  const trunkTop=1.4;
-  for(let i=0;i<1200;i++){
-    const y=Rn()*trunkTop+.04;
-    const rr=Sq(Rn())*lerp(.16,.12,(y-.04)/trunkTop)*.85,ang=Rn()*P*2;
-    const c=yc(y,39/360,41/360,.38,.44,.50,.64);
-    setP(ki,C(ang)*rr,y,Sf(ang)*rr,c);ki++;
+  // ══════ TRUNK ═════════════════════════════════════════════
+  const trunkH=1.3;
+  for(let i=0;i<1300;i++){
+    const y=Rn()*trunkH+.04;
+    const rr=Sq(Rn())*lerp(.18,.12,y/trunkH)*.82,ang=Rn()*P*2;
+    const c=col(y,39/360,41/360,.38,.44,.50,.64);
+    setP(C(ang)*rr,y,Sf(ang)*rr,c[0],c[1],c[2]);ki++;
   }
 
-  // ── MAIN BRANCHES: 13 visible arcs from trunk to canopy ─────
-  const NBR=13,brP=350,subP=120,tipP=40;
+  // ══════ BRANCHES: 15 main, each with subs + twigs ═════════
+  const NBR=15,brP=400,subP=150,twigP=60,tipP=60;
   for(let b=0;b<NBR;b++){
-    const tt=.12+(b/(NBR-1))*.73;
-    const y0=lerp(.25,trunkTop*.92,tt);
-    const trRad=lerp(.14,.08,tt)*.8;
-    const baseAz=b/NBR*P*2+(Rn()-.5)*.45;
-    const bx=C(baseAz)*trRad,by=y0,bz=Sf(baseAz)*trRad;
-    // Curved branch: quadratic bezier with bowing
-    const el=.1+Rn()*.35,len=.55+Rn()*.65;
+    const tt=.08+(b/(NBR-1))*.68;
+    const y0=lerp(.18,trunkH*.9,tt);
+    const trR=lerp(.16,.1,tt)*.78;
+    const baseAz=b/NBR*P*2+(Rn()-.5)*.4;
+    const bx=C(baseAz)*trR,by=y0,bz=Sf(baseAz)*trR;
+    // Branch endpoint
+    const el=.08+Rn()*.28,len=.55+Rn()*.7;
     const mx=C(baseAz)*C(el),my=Sf(el),mz=Sf(baseAz)*C(el);
     const ex=bx+mx*len,ey=by+my*len,ez=bz+mz*len;
-    // Control point bows outward
-    const bow=.15+Rn()*.3;
-    const cpX=lerp(bx,ex,.5)+C(baseAz)*bow,cpY=lerp(by,ey,.45)+.15+Rn()*.2,cpZ=lerp(bz,ez,.5)+Sf(baseAz)*bow;
-    // Fill branch
+    // Control point bows outward & slightly up
+    const bow=.12+Rn()*.28;
+    const cpX=lerp(bx,ex,.45)+C(baseAz)*bow,cpY=lerp(by,ey,.4)+.12+Rn()*.15,cpZ=lerp(bz,ez,.45)+Sf(baseAz)*bow;
+
+    // Main branch tube
     for(let k=0;k<brP;k++){
-      const t=Rn(),u=1-t;
-      const cx=u*u*bx+2*u*t*cpX+t*t*ex;
-      const cy=u*u*by+2*u*t*cpY+t*t*ey;
-      const cz=u*u*bz+2*u*t*cpZ+t*t*ez;
-      const r=lerp(.04,.018,t)*.75,rr=Sq(Rn())*r;
-      const ang=Rn()*P*2,ca=M.cos(ang),sa=M.sin(ang);
-      const c=yc(cy,38/360,42/360,.36,.42,.54,.76);
-      setP(ki,cx+rr*ca,cy+rr*sa*.4,cz+rr*ca,c);ki++;
+      const t=Rn(),cp=b2(t,[bx,by,bz],[cpX,cpY,cpZ],[ex,ey,ez]);
+      const rad=lerp(.042,.018,t)*.7;
+      const pt=tubePoint(cp,rad);
+      const c=col(cp[1],38/360,42/360,.36,.42,.54,.76);
+      setP(pt.x,pt.y,pt.z,c[0],c[1],c[2]);ki++;
     }
     // Sub-branches
     const nSub=2+M.floor(Rn()*3);
     for(let s=0;s<nSub;s++){
-      const bt=.3+Rn()*.45,u=1-bt;
-      const sx=u*u*bx+2*u*bt*cpX+bt*bt*ex;
-      const sy=u*u*by+2*u*bt*cpY+bt*bt*ey;
-      const sz=u*u*bz+2*u*bt*cpZ+bt*bt*ez;
-      const saz=Rn()*P*2,sel=.05+Rn()*.35,slen=.12+Rn()*.28;
-      const smx=C(saz)*C(sel),smy=Sf(sel),smz=Sf(saz)*C(sel);
-      const sex=sx+smx*slen,sey=sy+smy*slen,sez=sz+smz*slen;
-      const scpX=lerp(sx,sex,.5)+(Rn()-.5)*.1,scpY=lerp(sy,sey,.45)+(Rn()-.5)*.08,scpZ=lerp(sz,sez,.5)+(Rn()-.5)*.1;
+      const bt=.25+Rn()*.45;
+      const sb=b2(bt,[bx,by,bz],[cpX,cpY,cpZ],[ex,ey,ez]);
+      const saz=Rn()*P*2,sel=.05+Rn()*.35,slen=.12+Rn()*.26;
+      const sex=sb[0]+C(saz)*C(sel)*slen,sey=sb[1]+Sf(sel)*slen,sez=sb[2]+Sf(saz)*C(sel)*slen;
+      const scX=lerp(sb[0],sex,.45)+(Rn()-.5)*.08,scY=lerp(sb[1],sey,.4)+(Rn()-.5)*.06,scZ=lerp(sb[2],sez,.45)+(Rn()-.5)*.08;
       for(let k=0;k<subP;k++){
-        const t2=Rn(),u2=1-t2;
-        const cx2=u2*u2*sx+2*u2*t2*scpX+t2*t2*sex;
-        const cy2=u2*u2*sy+2*u2*t2*scpY+t2*t2*sey;
-        const cz2=u2*u2*sz+2*u2*t2*scpZ+t2*t2*sez;
-        const r2=lerp(.025,.012,t2)*.65,rr2=Sq(Rn())*r2;
-        const ang2=Rn()*P*2,ca2=M.cos(ang2),sa2=M.sin(ang2);
-        const c2=yc(cy2,39/360,43/360,.34,.40,.60,.84);
-        setP(ki,cx2+rr2*ca2,cy2+rr2*sa2*.4,cz2+rr2*ca2,c2);ki++;
+        const t2=Rn(),cp2=b2(t2,sb,[scX,scY,scZ],[sex,sey,sez]);
+        const rad2=lerp(.025,.012,t2)*.6;
+        const pt2=tubePoint(cp2,rad2);
+        const c2=col(cp2[1],39/360,43/360,.34,.40,.60,.84);
+        setP(pt2.x,pt2.y,pt2.z,c2[0],c2[1],c2[2]);ki++;
       }
-      // Tip foliage cluster
+      // Twigs from sub-branch
+      const nTwig=1+M.floor(Rn()*2);
+      for(let w=0;w<nTwig;w++){
+        const wt=.35+Rn()*.4;
+        const tw=b2(wt,sb,[scX,scY,scZ],[sex,sey,sez]);
+        const waz=Rn()*P*2,wel=.05+Rn()*.3,wlen=.06+Rn()*.14;
+        const wex=tw[0]+C(waz)*C(wel)*wlen,wey=tw[1]+Sf(wel)*wlen,wez=tw[2]+Sf(waz)*C(wel)*wlen;
+        for(let k=0;k<twigP;k++){
+          const t3=Rn(),cp3=lerp(tw[0],wex,t3),cp3y=lerp(tw[1],wey,t3),cp3z=lerp(tw[2],wez,t3);
+          const rad3=lerp(.015,.006,t3)*.55;
+          const pt3=tubePoint([cp3,cp3y,cp3z],rad3);
+          const c3=col(cp3y,40/360,44/360,.30,.38,.66,.88);
+          setP(pt3.x,pt3.y,pt3.z,c3[0],c3[1],c3[2]);ki++;
+        }
+      }
+      // Foliage cluster at sub-branch tip
       for(let k=0;k<tipP;k++){
-        const cr=.07,phi=M.acos(2*Rn()-1),th=Rn()*P*2,rd=Sq(Rn())*cr;
-        const c3=yc(sey,40/360,44/360,.28,.36,.66,.88);
-        setP(ki,sex+rd*Sf(phi)*C(th),sey+rd*Sf(phi)*Sf(th)*.7,sez+rd*C(phi),c3);ki++;
+        const cr=.08,phi=M.acos(2*Rn()-1),th=Rn()*P*2,rd=Sq(Rn())*cr;
+        const c4=col(sey,41/360,44/360,.26,.34,.68,.90);
+        setP(sex+rd*Sf(phi)*C(th),sey+rd*Sf(phi)*Sf(th)*.65,sez+rd*C(phi),c4[0],c4[1],c4[2]);ki++;
       }
     }
   }
 
-  // ── CANOPY VOLUME: light fill between branches, mostly near tips
+  // Fill any remaining slots with branch-like structure
   while(ki<N){
-    const y=.9+Rn()*2.4; // only in canopy zone
-    const yFrac=(y-.9)/2.4;
-    // Max radius shrinks near top, grows in middle
-    const rMax=.1+1.1*M.sin(yFrac*P*.85)+.05*M.sin(yFrac*P*3.7);
-    const rr=Sq(Rn())*rMax,ang=Rn()*P*2;
-    const c=yc(y,39/360,43/360,.34,.38,.58,.84);
-    setP(ki,C(ang)*rr,y,Sf(ang)*rr,c);ki++;
+    const ci=M.floor(Rn()*NBR);
+    const tt=.08+(ci/(NBR-1))*.68;
+    const y0=lerp(.18,trunkH*.9,tt);
+    const trR=lerp(.16,.1,tt)*.78;
+    const baseAz=ci/NBR*P*2+(Rn()-.5)*.5;
+    const bx=C(baseAz)*trR,by=y0,bz=Sf(baseAz)*trR;
+    const el=.08+Rn()*.28,len=.55+Rn()*.7;
+    const mx=C(baseAz)*C(el),my=Sf(el),mz=Sf(baseAz)*C(el);
+    const ex=bx+mx*len,ey=by+my*len,ez=bz+mz*len;
+    const bow=.12+Rn()*.28;
+    const cpX=lerp(bx,ex,.45)+C(baseAz)*bow,cpY=lerp(by,ey,.4)+.12+Rn()*.15,cpZ=lerp(bz,ez,.45)+Sf(baseAz)*bow;
+    const t=Rn(),cp=b2(t,[bx,by,bz],[cpX,cpY,cpZ],[ex,ey,ez]);
+    const rad=lerp(.042,.018,t)*.7;
+    const pt=tubePoint(cp,rad);
+    const c=col(cp[1],38/360,43/360,.34,.40,.56,.80);
+    setP(pt.x,pt.y,pt.z,c[0],c[1],c[2]);ki++;
   }
 
-  // ── SURFACE HALO ────────────────────────────────────────────
+  // Halo: scatter around branch tips only (canopy rim light)
   for(let i=0;i<NHALO;i++){
-    const y=.9+Rn()*2.4,yf=(y-.9)/2.4;
-    const rM=.1+1.1*M.sin(yf*P*.85),rr=rM*(.92+Rn()*.10),ang=Rn()*P*2;
+    const ci=M.floor(Rn()*NBR);
+    const tt=.08+(ci/(NBR-1))*.68;
+    const y0=lerp(.18,trunkH*.9,tt);
+    const trR=lerp(.16,.1,tt)*.78;
+    const baseAz=ci/NBR*P*2+(Rn()-.5)*.5;
+    const bx=C(baseAz)*trR,by=y0,bz=Sf(baseAz)*trR;
+    const el=.08+Rn()*.28,len=.55+Rn()*.7;
+    const mx=C(baseAz)*C(el),my=Sf(el),mz=Sf(baseAz)*C(el);
+    const ex=bx+mx*len,ey=by+my*len,ez=bz+mz*len;
+    const bow=.12+Rn()*.28;
+    const cpX=lerp(bx,ex,.45)+C(baseAz)*bow,cpY=lerp(by,ey,.4)+.12+Rn()*.15,cpZ=lerp(bz,ez,.45)+Sf(baseAz)*bow;
+    // Halo near branch tips (t > 0.7)
+    const t=.7+Rn()*.3,cp=b2(t,[bx,by,bz],[cpX,cpY,cpZ],[ex,ey,ez]);
+    const rad=.04+(Rn()-.3)*.08,rr=rad;
+    const ang=Rn()*P*2;
     const j=i*3;
-    hPos[j]=C(ang)*rr;hPos[j+1]=y;hPos[j+2]=Sf(ang)*rr;
-    const c=yc(y,40/360,44/360,.26,.32,.64,.90);
+    hPos[j]=cp[0]+M.cos(ang)*rr;hPos[j+1]=cp[1]+M.sin(ang)*rr*.4;hPos[j+2]=cp[2]+M.sin(ang)*rr;
+    const c=col(cp[1],41/360,44/360,.24,.30,.68,.92);
     hCol[j]=c[0];hCol[j+1]=c[1];hCol[j+2]=c[2];
   }
 }
