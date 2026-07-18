@@ -128,39 +128,39 @@ const cTreePos=new Float32Array(NCORE*3),cTreeCol=new Float32Array(NCORE*3);
   }
 }
 
-// Compute sphere shape: gradient nebula + hot core ────────────
+// Compute sphere shape: Fibonacci even distribution ───────────
 {
-  // Outer sphere: warm rose → lavender → ice blue gradient by latitude
   const R=1.2;
+  const gr=(1+M.sqrt(5))/2; // golden ratio
   for(let i=0;i<N;i++){
     const j=i*3;
-    const phi=M.acos(2*Rn()-1); // 0=north pole, PI=south pole
-    const th=Rn()*P*2;
-    // 30% surface, 40% mid, 30% deep — variable radii
-    const band=Rn();
-    const depth=band<.3?.88+Rn()*.04:band<.7?.92+Rn()*.06:.96+Rn()*.04;
-    const rr=R*depth;
+    // Fibonacci sphere: uniform surface coverage
+    const phi=M.acos(1-2*(i+.5)/N);
+    const th=P*2*((i*gr)%1);
+    // Slight radial noise for texture (not too deep, just enough for fluff)
+    const rr=R*(.94+Rn()*.06);
     treePos[j]=rr*M.sin(phi)*M.cos(th);
     treePos[j+1]=rr*M.sin(phi)*M.sin(th);
     treePos[j+2]=rr*M.cos(phi);
-    // Latitude-based gradient: equator=warm rose, mid=lavender, poles=ice blue
-    const lat=M.abs(phi/P-.5)*2; // 0=equator, 1=poles
-    const hue=lerp(lerp(.15,.70,lat),.58,lat*lat); // rose→purple→blue
-    const sat=lerp(.65,.35,lat);
-    const lit=lerp(.55,.80,lat);
+    // Latitude gradient: equator warm → poles cool
+    const lat=M.abs(phi/P-.5)*2;
+    const hue=lerp(lerp(.15,.70,lat),.58,lat*lat);
+    const sat=lerp(.6,.35,lat);
+    const lit=lerp(.55,.78,lat);
     const c=hsl(hue,sat,lit);
     treeCol[j]=c.r;treeCol[j+1]=c.g;treeCol[j+2]=c.b;
   }
-  // Hot core: small dense blue-white sphere inside
+  // Hot core: Fibonacci too
   const cR=.35;
   for(let i=0;i<NCORE;i++){
     const j=i*3;
-    const phi=M.acos(2*Rn()-1),th=Rn()*P*2;
-    const rr=cR*(.85+Rn()*.15);
+    const phi=M.acos(1-2*(i+.5)/NCORE);
+    const th=P*2*((i*gr)%1);
+    const rr=cR*(.94+Rn()*.06);
     cTreePos[j]=rr*M.sin(phi)*M.cos(th);
     cTreePos[j+1]=rr*M.sin(phi)*M.sin(th);
     cTreePos[j+2]=rr*M.cos(phi);
-    const c=hsl(.58+(Rn()-.5)*.04,.25+Rn()*.2,.7+Rn()*.25);
+    const c=hsl(.58+(Rn()-.5)*.03,.2+Rn()*.15,.72+Rn()*.2);
     cTreeCol[j]=c.r;cTreeCol[j+1]=c.g;cTreeCol[j+2]=c.b;
   }
 }
