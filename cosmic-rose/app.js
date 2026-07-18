@@ -44,6 +44,7 @@ document.body.prepend(ren.domElement);
 const scene=new T.Scene();scene.background=new T.Color(0x010108);
 const camera=new T.PerspectiveCamera(50,innerWidth/innerHeight,.5,50);
 camera.position.set(0,0,6.5);camera.lookAt(0,0,0);
+camera.near=.2;camera.updateProjectionMatrix();
 
 const comp=new EffectComposer(ren);
 comp.addPass(new RenderPass(scene,camera));
@@ -809,8 +810,9 @@ function tick(){
   if(state===States.SPHERE){
     // Camera pierces through outer shell toward inner core
     // hand open → rush forward through outer sphere into ring zone
-    // sqrt curve: small openness → deep penetration through outer shell
-    const tgtZ=6.5-M.sqrt(openness)*9; // 0.3→1.6(near shell) 0.4→0.8(inside) 0.5→0.1(core)
+    // Linear ramp: openness*12, clamped to stop in ring zone (not inside core)
+    const rawZ=6.5-openness*12; // o=0.5→0.5(ring), o=0.4→1.7, o=0.3→2.9
+    const tgtZ=M.max(.4,M.min(rawZ,6.5)); // never past ring zone, never inside core
     camera.position.z=lerp(camera.position.z,tgtZ,15*dt);
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
