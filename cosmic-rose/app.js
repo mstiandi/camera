@@ -16,6 +16,7 @@ const evB=(pts,t)=>{if(pts.length===4){const u=1-t;return[u*u*u*pts[0][0]+3*u*u*
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
 const N=12000,NCORE=2000,RING_POOL=4;
+let smoothOpenness=0;
 const States={IDLE:0,GATHERING:1,PULSING:2,EXPLODING:3,SCATTERED:4,FORMING_SPHERE:5,SPHERE:6};
 const HINTS=[
   '伸出食指召唤星辰',
@@ -343,7 +344,7 @@ function setState(newState){
       for(let i=0;i<NCORE*3;i++){cTgt[i]=cTreePos[i];cTgtCol[i]=cTreeCol[i];}
     }
     debrisPts.visible=true;dMat.opacity=.5;
-    corePts.visible=true;
+    corePts.visible=true;smoothOpenness=0;
   }
   if(newState===States.IDLE){
     copyTargets(idlePos,idleCol);debrisPts.visible=false;dMat.opacity=0;
@@ -808,11 +809,11 @@ function tick(){
   // SPHERE interactions
   // ═══════════════════════════════════════════════════════════════
   if(state===States.SPHERE){
-    // Camera pierces through outer shell toward inner core
-    // hand open → rush forward through outer sphere into ring zone
-    const rawZ=6.5-openness*12;
+    // Smooth openness to eliminate hand jitter
+    smoothOpenness=lerp(smoothOpenness,openness,3*dt);
+    const rawZ=6.5-smoothOpenness*12;
     const tgtZ=M.max(.4,M.min(rawZ,6.5));
-    camera.position.z=lerp(camera.position.z,tgtZ,15*dt);
+    camera.position.z=lerp(camera.position.z,tgtZ,10*dt);
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
     const close=M.max(0,1-(camera.position.z/2.5));
