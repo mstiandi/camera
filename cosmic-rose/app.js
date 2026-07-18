@@ -195,7 +195,8 @@ const pts=new T.Points(pGeo,pMat);
 const cGeo=mkGeo(cPos,cCol);
 const cMat=new T.PointsMaterial({size:.045,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
 const corePts=new T.Points(cGeo,cMat);corePts.visible=false;
-const grp=new T.Group();grp.add(pts);grp.add(corePts);scene.add(grp);
+const grp=new T.Group();grp.add(pts);scene.add(grp);
+scene.add(corePts); // core independent from outer sphere scaling
 
 // ── Ghost trails ────────────────────────────────────────────────
 const ghosts=[];
@@ -801,18 +802,30 @@ function tick(){
     ghosts[g].scale.copy(grp.scale);
     ghosts[g].material.opacity=(state===States.PULSING?.25:.2)-g*.08;
   }
+  // Core ghost rotation sync
+  if(state===States.SPHERE){
+    corePts.rotation.y=lerp(corePts.rotation.y,grp.rotation.y*.5,2*dt);
+  }
 
   // ═══════════════════════════════════════════════════════════════
   // SPHERE interactions
   // ═══════════════════════════════════════════════════════════════
   if(state===States.SPHERE){
     if(handPresent){
-      const tgtScale=2.5-openness*2.0; // open=0.5, close=2.5
-      grp.scale.lerp(new T.Vector3(tgtScale,tgtScale,tgtScale),8*dt);
+      // Outer sphere: open hand → balloons out (pass through it)
+      const outerScale=.7+openness*3.8; // closed=0.7x, open=4.5x
+      grp.scale.lerp(new T.Vector3(outerScale,outerScale,outerScale),8*dt);
+      // Inner core: stays stable, slight glow pulse with openness
+      const coreScale=.85+openness*.35; // 0.85~1.2
+      corePts.scale.lerp(new T.Vector3(coreScale,coreScale,coreScale),6*dt);
+      cMat.opacity=lerp(cMat.opacity,.75+openness*.25,4*dt);
       grp.rotation.y+=pointDir*1.5*dt;
+      corePts.rotation.y+=pointDir*.8*dt;
     }else{
       grp.rotation.y+=dt*.2;
-      grp.scale.lerp(new T.Vector3(1.2,1.2,1.2),1.5*dt);
+      corePts.rotation.y+=dt*.1;
+      grp.scale.lerp(new T.Vector3(1,1,1),1.5*dt);
+      corePts.scale.lerp(new T.Vector3(1,1,1),1.5*dt);
     }
     const sName='🔮 光球';
     if(handPresent){
