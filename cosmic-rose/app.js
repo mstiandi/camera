@@ -192,6 +192,7 @@ for(let i=0;i<NCORE;i++){
 function mkGeo(p,c){const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(p,3));g.setAttribute('color',new T.BufferAttribute(c,3));return g}
 const pGeo=mkGeo(pos,col);
 const pMat=new T.PointsMaterial({size:.06,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
+const pMatOpaque=new T.PointsMaterial({size:.06,map:sprite,vertexColors:true,blending:T.NormalBlending,depthTest:true,depthWrite:false,transparent:true});
 const pts=new T.Points(pGeo,pMat);
 // Core: hot inner sphere, smaller but brighter
 const cGeo=mkGeo(cPos,cCol);
@@ -345,10 +346,12 @@ function setState(newState){
     }
     debrisPts.visible=true;dMat.opacity=.5;
     corePts.visible=true;smoothOpenness=0;
+    pts.material=pMatOpaque;
   }
   if(newState===States.IDLE){
     copyTargets(idlePos,idleCol);debrisPts.visible=false;dMat.opacity=0;
     glowShell.visible=false;corePts.visible=false;
+    pts.material=pMat;
   }
   if(newState===States.SCATTERED){
     circleBuf.length=0;dMat.opacity=.85;debrisPts.visible=true;pts.material=pMat;
@@ -809,10 +812,11 @@ function tick(){
   // ═══════════════════════════════════════════════════════════════
   if(state===States.SPHERE){
     // Heavy EMA: ~1.5s to respond, kills frame-level jitter completely
-    smoothOpenness=lerp(smoothOpenness,openness,.7*dt);
+    smoothOpenness=lerp(smoothOpenness,openness,3*dt);
     const rawZ=6.5-smoothOpenness*12;
     const tgtZ=M.max(.4,M.min(rawZ,6.5));
-    camera.position.z=lerp(camera.position.z,tgtZ,5*dt);
+    // Snap: no camera lerp, just smooth openness does the work
+    camera.position.z=tgtZ;
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
     const close=M.max(0,1-(camera.position.z/2.5));
@@ -823,7 +827,7 @@ function tick(){
     }else{
       grp.rotation.y+=dt*.2;
       corePts.rotation.y+=dt*.1;
-      camera.position.z=lerp(camera.position.z,6.5,2*dt);
+      camera.position.z=lerp(camera.position.z,6.5,3*dt);
     }
     const sName='🔮 光球';
     if(handPresent){
@@ -885,7 +889,7 @@ addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
 });
 // DEBUG: press 't' to force TREE state for visual testing
-addEventListener('keydown',e=>{if(e.key==='s'&&state!==States.SPHERE){copyTargets(treePos,treeCol);for(let i=0;i<NCORE*3;i++){cTgt[i]=cTreePos[i];cTgtCol[i]=cTreeCol[i];}prevState=States.SCATTERED;state=States.SPHERE;stateTime=0;debrisPts.visible=true;dMat.opacity=.5;corePts.visible=true;}});
+addEventListener('keydown',e=>{if(e.key==='s'&&state!==States.SPHERE){copyTargets(treePos,treeCol);for(let i=0;i<NCORE*3;i++){cTgt[i]=cTreePos[i];cTgtCol[i]=cTreeCol[i];}prevState=States.SCATTERED;state=States.SPHERE;stateTime=0;debrisPts.visible=true;dMat.opacity=.5;corePts.visible=true;smoothOpenness=0;pts.material=pMatOpaque;}});
 
 // ═══════════════════════════════════════════════════════════════════
 // START
