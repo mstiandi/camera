@@ -16,7 +16,6 @@ const evB=(pts,t)=>{if(pts.length===4){const u=1-t;return[u*u*u*pts[0][0]+3*u*u*
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
 const N=12000,NCORE=2000,RING_POOL=4;
-let smoothOpenness=0;
 const States={IDLE:0,GATHERING:1,PULSING:2,EXPLODING:3,SCATTERED:4,FORMING_SPHERE:5,SPHERE:6};
 const HINTS=[
   '伸出食指召唤星辰',
@@ -192,7 +191,6 @@ for(let i=0;i<NCORE;i++){
 function mkGeo(p,c){const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(p,3));g.setAttribute('color',new T.BufferAttribute(c,3));return g}
 const pGeo=mkGeo(pos,col);
 const pMat=new T.PointsMaterial({size:.06,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
-const pMatOpaque=new T.PointsMaterial({size:.06,map:sprite,vertexColors:true,blending:T.NormalBlending,depthTest:true,depthWrite:false,transparent:true});
 const pts=new T.Points(pGeo,pMat);
 // Core: hot inner sphere, smaller but brighter
 const cGeo=mkGeo(cPos,cCol);
@@ -345,13 +343,11 @@ function setState(newState){
       for(let i=0;i<NCORE*3;i++){cTgt[i]=cTreePos[i];cTgtCol[i]=cTreeCol[i];}
     }
     debrisPts.visible=true;dMat.opacity=.5;
-    corePts.visible=true;smoothOpenness=0;
-    pts.material=pMatOpaque;
+    corePts.visible=true;
   }
   if(newState===States.IDLE){
     copyTargets(idlePos,idleCol);debrisPts.visible=false;dMat.opacity=0;
     glowShell.visible=false;corePts.visible=false;
-    pts.material=pMat;
   }
   if(newState===States.SCATTERED){
     circleBuf.length=0;dMat.opacity=.85;debrisPts.visible=true;pts.material=pMat;
@@ -777,8 +773,6 @@ function tick(){
       dCol[j]=lerp(dCol[j],.95,2*dt);dCol[j+1]=lerp(dCol[j+1],.8,2*dt);dCol[j+2]=lerp(dCol[j+2],.45,2*dt);
     }
     dGeo.attributes.position.needsUpdate=true;dGeo.attributes.color.needsUpdate=true;
-    pts.material.opacity=lerp(pts.material.opacity,.88,2*dt);
-    cMat.opacity=lerp(cMat.opacity,.92,2*dt);
     bloom.strength=lerp(bloom.strength,.55,2*dt);
   }
 
@@ -812,15 +806,15 @@ function tick(){
   // ═══════════════════════════════════════════════════════════════
   if(state===States.SPHERE){
     // Heavy EMA: ~1.5s to respond, kills frame-level jitter completely
-    smoothOpenness=lerp(smoothOpenness,openness,3*dt);
-    const rawZ=6.5-smoothOpenness*12;
-    const tgtZ=M.max(.4,M.min(rawZ,6.5));
-    // Snap: no camera lerp, just smooth openness does the work
-    camera.position.z=tgtZ;
+    // Integrator: openness→speed, noise cancels over time
+    const spd=(openness-.22)*18;
+    camera.position.z=M.max(.4,M.min(camera.position.z-spd*dt,6.5));
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
-    const close=M.max(0,1-(camera.position.z/2.5));
-    cMat.opacity=lerp(cMat.opacity,.7+close*.3,5*dt);
+    // Outer shell fades as camera penetrates (avoids white wall)
+    const inShell=M.max(0,1-camera.position.z/2.5);
+    pMat.opacity=lerp(pMat.opacity,.88-inShell*.55,3*dt);
+    cMat.opacity=lerp(cMat.opacity,.7+inShell*.3,5*dt);
     if(handPresent){
       grp.rotation.y+=pointDir*1.5*dt;
       corePts.rotation.y+=pointDir*.8*dt;
@@ -889,7 +883,7 @@ addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
 });
 // DEBUG: press 't' to force TREE state for visual testing
-addEventListener('keydown',e=>{if(e.key==='s'&&state!==States.SPHERE){copyTargets(treePos,treeCol);for(let i=0;i<NCORE*3;i++){cTgt[i]=cTreePos[i];cTgtCol[i]=cTreeCol[i];}prevState=States.SCATTERED;state=States.SPHERE;stateTime=0;debrisPts.visible=true;dMat.opacity=.5;corePts.visible=true;smoothOpenness=0;pts.material=pMatOpaque;}});
+addEventListener('keydown',e=>{if(e.key==='s'&&state!==States.SPHERE){copyTargets(treePos,treeCol);for(let i=0;i<NCORE*3;i++){cTgt[i]=cTreePos[i];cTgtCol[i]=cTreeCol[i];}prevState=States.SCATTERED;state=States.SPHERE;stateTime=0;debrisPts.visible=true;dMat.opacity=.5;corePts.visible=true;}});
 
 // ═══════════════════════════════════════════════════════════════════
 // START
