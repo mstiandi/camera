@@ -37,7 +37,7 @@ let armParticles=null,pillarUp=null,pillarDown=null; // particle role arrays
 // ═══════════════════════════════════════════════════════════════════
 // THREE.JS SETUP
 // ═══════════════════════════════════════════════════════════════════
-const ren=new T.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});
+const ren=new T.WebGLRenderer({antialias:false});
 ren.setPixelRatio(M.min(devicePixelRatio,1));
 ren.setSize(innerWidth,innerHeight);
 ren.domElement.style.background='radial-gradient(ellipse at center,#1a1410 0%,#0a0808 40%,#010108 100%)';
@@ -127,60 +127,124 @@ const hPos=new Float32Array(NHALO*3),hCol=new Float32Array(NHALO*3);
   }
 }
 
-// Compute tree shape — 3D VOLUME SILHOUETTE ────────────────────
+// Compute tree shape — BRANCHES + ROOTS + VOLUME ───────────────
 {
-  const mr=y=>{
-    y=M.max(0,y);
-    if(y<.08)return lerp(.65,.42,y/.08);
-    if(y<.35)return lerp(.42,.14,(y-.08)/.27);
-    if(y<1.25)return .14+M.sin(y*2.1)*.02;
-    if(y<2.15)return lerp(.14,1.15,(y-1.25)/.9);
-    if(y<2.85)return 1.15-M.pow((y-2.15)/.7,2)*.3;
-    if(y<3.35)return lerp(1.15,.03,(y-2.85)/.5);
-    return .02;
-  };
   const yc=(y,hue0,hue1,sat0,sat1,lit0,lit1,hShift)=>{
     const t=M.min(1,y/2.7);
     const h=lerp(hue0,hue1,t)+hShift;
     const c=hsl(h,lerp(sat0,sat1,t),lerp(lit0,lit1,t));
     return[c.r,c.g,c.b];
   };
-  // Root plate ─────────────────────────────────────────────────
-  for(let i=0;i<800;i++){
-    const ang=Rn()*P*2,y=Rn()*.08,rr=Sq(Rn())*mr(y);
-    const j=i*3;treePos[j]=C(ang)*rr;treePos[j+1]=y;treePos[j+2]=Sf(ang)*rr;
-    const c=yc(y,39/360,40/360,.38,.42,.55,.62,(Rn()-.5)*.008);
-    treeCol[j]=c[0];treeCol[j+1]=c[1];treeCol[j+2]=c[2];
-  }
-  // Root tendrils ──────────────────────────────────────────────
-  for(let r=0;r<8;r++){
-    const ang=r/8*P*2+(Rn()-.5)*.15,len=.5+Rn()*.35;
-    for(let k=0;k<100;k++){
-      const t=Rn(),rr=t*len,y2=t*.12+.01,thick=.06*(1-t);
-      const rad=rr,mul=lerp(.7,1,Rn());
-      const j=(800+r*100+k)*3;
-      treePos[j]=C(ang+mul*(Rn()-.5)*.3)*(rad+thick*(Rn()-.5));
-      treePos[j+1]=y2+(Rn()-.5)*.03;
-      treePos[j+2]=Sf(ang+mul*(Rn()-.5)*.3)*(rad+thick*(Rn()-.5));
-      const c=yc(y2,39/360,40/360,.36,.42,.52,.62,(Rn()-.5)*.008);
-      treeCol[j]=c[0];treeCol[j+1]=c[1];treeCol[j+2]=c[2];
+  const mr=y=>{
+    y=M.max(0,y);
+    if(y<.08)return lerp(.65,.42,y/.08);
+    if(y<.35)return lerp(.42,.16,(y-.08)/.27);
+    if(y<1.25)return .16+M.sin(y*2.1)*.02;
+    if(y<2.15)return lerp(.16,1.2,(y-1.25)/.9);
+    if(y<2.85)return 1.2-M.pow((y-2.15)/.7,2)*.3;
+    if(y<3.35)return lerp(1.2,.03,(y-2.85)/.5);
+    return .02;
+  };
+  // Sample a point with thickness around a line segment ──────
+  const sp=(ax,ay,az,bx,by,bz,t,rad)=>{
+    const x0=lerp(ax,bx,t),y0=lerp(ay,by,t),z0=lerp(az,bz,t);
+    const dx=bx-ax,dy=by-ay,dz=bz-az,len=Sq(dx*dx+dy*dy+dz*dz)||.001;
+    // Normalize direction
+    const nx=dx/len,ny=dy/len,nz=dz/len;
+    // Pick random perpendicular direction
+    const ang=Rn()*P*2,ca=M.cos(ang),sa=M.sin(ang);
+    // Compute two perpendiculars
+    const rx=M.abs(ny)>.99?1:0,ry=M.abs(ny)>.99?0:1,rz=0;
+    const p1x=ry*nz-rz*ny,p1y=rz*nx-rx*nz,p1z=rx*ny-ry*nx;
+    const p1l=Sq(p1x*p1x+p1y*p1y+p1z*p1z)||.001;
+    const ux=p1x/p1l,uy=p1y/p1l,uz=p1z/p1l;
+    const vx=ny*uz-nz*uy,vy=nz*ux-nx*uz,vz=nx*uy-ny*ux;
+    const rr=Sq(Rn())*rad;
+    return{x:x0+rr*(ca*ux+sa*vx),y:y0+rr*(ca*uy+sa*vy),z:z0+rr*(ca*uz+sa*vz)};
+  };
+  let ki=0;
+  const setP=(i,x,y,z,col)=>{const j=i*3;treePos[j]=x;treePos[j+1]=y;treePos[j+2]=z;treeCol[j]=col[0];treeCol[j+1]=col[1];treeCol[j+2]=col[2];};
+
+  // ── ROOTS: 7 thick arches from base ─────────────────────────
+  const NROOT=7,rootP=250;
+  for(let r=0;r<NROOT;r++){
+    const ang=r/NROOT*P*2+(Rn()-.5)*.2;
+    const len=.5+Rn()*.45,drop=.25+Rn()*.22;
+    const bx=0,by=.04,bz=0;
+    const mx=C(ang)*len*.55,my=-drop*.35,mz=Sf(ang)*len*.55;
+    const ex=C(ang)*len,ey=-drop,ez=Sf(ang)*len;
+    for(let k=0;k<rootP;k++){
+      const t=Rn(),rad=.07*(1-t)*.9;
+      const quad=1-(1-t)*(1-t);
+      const x0=lerp(bx,mx,quad),y0=lerp(by,my,quad),z0=lerp(bz,mz,quad);
+      const x1=lerp(mx,ex,t),y1=lerp(my,ey,t),z1=lerp(mz,ez,t);
+      const pt=t<.5?{x:lerp(x0,mx,t*2),y:lerp(y0,my,t*2),z:lerp(z0,mz,t*2)}:{x:lerp(mx,x1,(t-.5)*2),y:lerp(my,y1,(t-.5)*2),z:lerp(mz,z1,(t-.5)*2)};
+      const rr=Sq(Rn())*rad,ang2=Rn()*P*2,ca=M.cos(ang2),sa=M.sin(ang2);
+      const c=yc(pt.y<0?0:pt.y,39/360,41/360,.36,.44,.48,.60,(Rn()-.5)*.006);
+      setP(ki,pt.x+rr*ca,pt.y+rr*sa*.4,pt.z+rr*ca,c);ki++;
     }
   }
-  // Main volume: 70% uniform, 30% surface-biased ──────────────
-  let ki=800+8*100;
+
+  // ── TRUNK: filled cylinder volume ───────────────────────────
+  const TR=1400;
+  for(let i=0;i<TR;i++){
+    const y=Rn()*1.5+.04,rad=mr(y);
+    const rr=Sq(Rn())*rad*.85,ang=Rn()*P*2;
+    const c=yc(y,39/360,41/360,.38,.44,.50,.62,(Rn()-.5)*.006);
+    setP(ki,C(ang)*rr,y,Sf(ang)*rr,c);ki++;
+  }
+
+  // ── MAIN BRANCHES: 9 paths from trunk to canopy edge ────────
+  const NBR=9;
+  for(let b=0;b<NBR;b++){
+    const y0=.22+(b/(NBR-1))*.76;
+    const trRad=mr(y0)*.85;
+    const az=b/NBR*P*2+(Rn()-.5)*.35;
+    const bx=C(az)*trRad,by=y0,bz=Sf(az)*trRad;
+    const el=.08+Rn()*.28,len=.7+Rn()*.7;
+    const mx2=C(az)*C(el),my2=Sf(el),mz2=Sf(az)*C(el);
+    const ex=bx+mx2*len,ey=by+my2*len,ez=bz+mz2*len;
+    // Particles along branch
+    for(let k=0;k<280;k++){
+      const t=Rn(),rad=.035*(1-t)*.8;
+      const p=sp(bx,by,bz,ex,ey,ez,t,rad);
+      const c=yc(p.y,38/360,42/360,.36,.42,.52,.72,(Rn()-.5)*.008);
+      setP(ki,p.x,p.y,p.z,c);ki++;
+    }
+    // Sub-branches: 2-3 per main branch
+    const nSub=2+M.floor(Rn()*2);
+    for(let s=0;s<nSub;s++){
+      const bt=.35+Rn()*.4;
+      const sx=lerp(bx,ex,bt),sy=lerp(by,ey,bt),sz=lerp(bz,ez,bt);
+      const saz=Rn()*P*2,sel=.05+Rn()*.3,slen=.15+Rn()*.25;
+      const smx=C(saz)*C(sel),smy=Sf(sel),smz=Sf(saz)*C(sel);
+      const se=sx+smx*slen,se2=sy+smy*slen,sez=sz+smz*slen;
+      for(let k=0;k<100;k++){
+        const t2=Rn(),rad2=.018*(1-t2)*.7;
+        const p2=sp(sx,sy,sz,se,se2,sez,t2,rad2);
+        const c=yc(p2.y,39/360,43/360,.34,.40,.58,.82,(Rn()-.5)*.008);
+        setP(ki,p2.x,p2.y,p2.z,c);ki++;
+      }
+      // Small canopy cluster at each sub-branch tip
+      for(let k=0;k<30;k++){
+        const cr=.06,phi=M.acos(2*Rn()-1),th=Rn()*P*2,rr=Sq(Rn())*cr;
+        const c=yc(se2,40/360,44/360,.30,.38,.64,.88,(Rn()-.5)*.005);
+        setP(ki,se+rr*Sf(phi)*C(th),se2+rr*Sf(phi)*Sf(th)*.6,sez+rr*C(phi),c);ki++;
+      }
+    }
+  }
+
+  // ── VOLUME FILL: remaining particles for crown bulk ────────
   while(ki<N){
     const y=Rn()*3.35,rMax=mr(y);
-    // 30% surface bias: use 0.85-1.0 of rMax
     const isSfc=ki%3===0;
     const rr=isSfc?rMax*(.85+Rn()*.15):Sq(Rn())*rMax;
     const ang=Rn()*P*2;
-    const j=ki*3;
-    treePos[j]=C(ang)*rr;treePos[j+1]=y;treePos[j+2]=Sf(ang)*rr;
     const c=yc(y,39/360,43/360,.35,.38,.58,.85,(Rn()-.5)*.01);
-    treeCol[j]=c[0];treeCol[j+1]=c[1];treeCol[j+2]=c[2];
-    ki++;
+    setP(ki,C(ang)*rr,y,Sf(ang)*rr,c);ki++;
   }
-  // Surface halo: NHALO particles on silhouette (0.92-1.02 rMax)
+
+  // ── SURFACE HALO ────────────────────────────────────────────
   for(let i=0;i<NHALO;i++){
     const y=Rn()*3.35,rMax=mr(y);
     const rr=rMax*(.92+Rn()*.10),ang=Rn()*P*2;
@@ -751,21 +815,26 @@ function tick(){
   }
 
   if(state===States.TREE){
-    // Gentle wobble + micro-flicker (4% particles per frame)
+    // Gentle wobble toward treePos, color toward treeCol
     for(let i=0;i<N;i++){
       const j=i*3;
       const k=6,dmp=4;
       vel[j]+=((treePos[j]-pos[j])*k-vel[j]*dmp+((Rn()-.5)*.015))*dt;
       vel[j+1]+=((treePos[j+1]-pos[j+1])*k-vel[j+1]*dmp+((Rn()-.5)*.015))*dt;
       vel[j+2]+=((treePos[j+2]-pos[j+2])*k-vel[j+2]*dmp+((Rn()-.5)*.008))*dt;
-      // Micro-flicker: only 3% active at any time
+      tgtCol[j]=lerp(tgtCol[j],treeCol[j],4*dt);
+      tgtCol[j+1]=lerp(tgtCol[j+1],treeCol[j+1],4*dt);
+      tgtCol[j+2]=lerp(tgtCol[j+2],treeCol[j+2],4*dt);
+    }
+    // Micro-flicker: update only 5% of particles per frame
+    const fc=M.floor(N*.05),fs=M.floor(Rn()*(N-fc));
+    for(let i=fs;i<fs+fc;i++){
       flickerP[i]+=dt;
-      const fi=i%32;
-      const fl=M.sin(flickerP[i]*8.3+fi*.19);
-      const bMul=fl>.95?1.15:1;
-      tgtCol[j]=lerp(tgtCol[j],treeCol[j]*bMul,4*dt);
-      tgtCol[j+1]=lerp(tgtCol[j+1],treeCol[j+1]*bMul,4*dt);
-      tgtCol[j+2]=lerp(tgtCol[j+2],treeCol[j+2]*bMul,4*dt);
+      const bMul=1.08+.07*M.sin(flickerP[i]*6.7);
+      const j=i*3;
+      tgtCol[j]=lerp(tgtCol[j],treeCol[j]*bMul,8*dt);
+      tgtCol[j+1]=lerp(tgtCol[j+1],treeCol[j+1]*bMul,8*dt);
+      tgtCol[j+2]=lerp(tgtCol[j+2],treeCol[j+2]*bMul,8*dt);
     }
     // Incense smoke rising from canopy
     for(let i=0;i<DEBRIS_N;i++){
