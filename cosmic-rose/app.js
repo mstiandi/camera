@@ -15,18 +15,16 @@ const evB=(pts,t)=>{if(pts.length===4){const u=1-t;return[u*u*u*pts[0][0]+3*u*u*
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const N=14000,NHALO=0,RING_POOL=4;
-const flickerP=new Float32Array(N+NHALO);
-for(let i=0;i<N+NHALO;i++)flickerP[i]=Rn()*P*2;
-const States={IDLE:0,GATHERING:1,PULSING:2,EXPLODING:3,SCATTERED:4,FORMING_TREE:5,TREE:6};
+const N=14000,RING_POOL=4;
+const States={IDLE:0,GATHERING:1,PULSING:2,EXPLODING:3,SCATTERED:4,FORMING_SPHERE:5,SPHERE:6};
 const HINTS=[
   '伸出食指召唤星辰',
   '星辰坠入漩涡…',
   '',
   '',
   '用手指在空中画一个圆',
-  '光之树正在生长…',
-  '🖐 张握缩放 · ☜☞ 旋转',
+  '光球正在凝聚…',
+  '🖐 张握缩放',
   ''
 ];
 let state=States.IDLE,prevState=-1,stateTime=0,pulseStart=0;
@@ -111,7 +109,6 @@ const pos=new Float32Array(N*3),vel=new Float32Array(N*3),col=new Float32Array(N
 const tgt=new Float32Array(N*3),tgtCol=new Float32Array(N*3);
 const idlePos=new Float32Array(N*3),idleCol=new Float32Array(N*3);
 const treePos=new Float32Array(N*3),treeCol=new Float32Array(N*3);
-const hPos=new Float32Array(NHALO*3),hCol=new Float32Array(NHALO*3);
 
 // ── Compute idle: scattered across view volume ──────────────────
 {
@@ -127,166 +124,22 @@ const hPos=new Float32Array(NHALO*3),hCol=new Float32Array(NHALO*3);
   }
 }
 
-// Compute tree shape — PROPER 3D CYLINDRICAL TUBES ─────────────
+// Compute sphere shape: particles on sphere surface ──────────
 {
-  const col=(y,h0,h1,s0,s1,l0,l1)=>{
-    const t=M.min(1,y/2.7),h=lerp(h0,h1,t);
-    const c=hsl(h,lerp(s0,s1,t),lerp(l0,l1,t));
-    return[c.r,c.g,c.b];
-  };
-
-  // b2(t) = quadratic bezier, b2t(t) = its tangent ──────────
-  const b2=(t,p0,p1,p2)=>{const u=1-t;return[
-    u*u*p0[0]+2*u*t*p1[0]+t*t*p2[0],
-    u*u*p0[1]+2*u*t*p1[1]+t*t*p2[1],
-    u*u*p0[2]+2*u*t*p1[2]+t*t*p2[2]];};
-  const b2t=(t,p0,p1,p2)=>{const u=1-t;return[
-    2*u*(p1[0]-p0[0])+2*t*(p2[0]-p1[0]),
-    2*u*(p1[1]-p0[1])+2*t*(p2[1]-p1[1]),
-    2*u*(p1[2]-p0[2])+2*t*(p2[2]-p1[2])];};
-  // b3(t) = cubic bezier, b3t(t) = its tangent ──────────────
-  const b3=(t,p0,p1,p2,p3)=>{const u=1-t;return[
-    u*u*u*p0[0]+3*u*u*t*p1[0]+3*u*t*t*p2[0]+t*t*t*p3[0],
-    u*u*u*p0[1]+3*u*u*t*p1[1]+3*u*t*t*p2[1]+t*t*t*p3[1],
-    u*u*u*p0[2]+3*u*u*t*p1[2]+3*u*t*t*p2[2]+t*t*t*p3[2]];};
-  const b3t=(t,p0,p1,p2,p3)=>{const u=1-t;return[
-    3*u*u*(p1[0]-p0[0])+6*u*t*(p2[0]-p1[0])+3*t*t*(p3[0]-p2[0]),
-    3*u*u*(p1[1]-p0[1])+6*u*t*(p2[1]-p1[1])+3*t*t*(p3[1]-p2[1]),
-    3*u*u*(p1[2]-p0[2])+6*u*t*(p2[2]-p1[2])+3*t*t*(p3[2]-p2[2])];};
-
-  // Fill circular cross-section perpendicular to a given tangent
-  const fillDisc=(cp,T,rad)=>{
-    const l=Sq(T[0]*T[0]+T[1]*T[1]+T[2]*T[2])||1e-6, tx=T[0]/l,ty=T[1]/l,tz=T[2]/l;
-    // Perpendicular N = T × world-up (or world-right if T parallel to up)
-    const ux=M.abs(ty)>.99?0:-tz,uy=M.abs(ty)>.99?tz:0,uz=M.abs(ty)>.99?-tx:tx;
-    const ul=Sq(ux*ux+uy*uy+uz*uz)||1e-6;
-    const nx=ux/ul,ny=uy/ul,nz=uz/ul;
-    // B = T × N
-    const bx=ty*nz-tz*ny,by=tz*nx-tx*nz,bz=tx*ny-ty*nx;
-    const ang=Rn()*P*2,ca=M.cos(ang),sa=M.sin(ang);
-    const rr=Sq(Rn())*rad;
-    return{x:cp[0]+rr*(ca*nx+sa*bx),y:cp[1]+rr*(ca*ny+sa*by),z:cp[2]+rr*(ca*nz+sa*bz)};
-  };
-
-  let ki=0;
-  const PUSH=(x,y,z,cr,cg,cb)=>{const j=ki*3;treePos[j]=x;treePos[j+1]=y;treePos[j+2]=z;treeCol[j]=cr;treeCol[j+1]=cg;treeCol[j+2]=cb;ki++;};
-  const PUSHC=(cp,clr)=>{PUSH(cp[0],cp[1],cp[2],clr[0],clr[1],clr[2]);ki--;PUSH(cp[0],cp[1],cp[2],clr[0],clr[1],clr[2]);};
-
-  // ══════ ROOTS: 8 cubic beziers, dramatic arcs ══════════════
-  for(let r=0;r<8;r++){
-    const az=r/8*P*2+(Rn()-.5)*.15,len=.8+Rn()*.6,drop=.35+Rn()*.35;
-    const p0=[0,.03,0];
-    const p1=[C(az)*len*.3,.03-drop*.12,Sf(az)*len*.3];
-    const p2=[C(az)*len*.65,.03-drop*.65,Sf(az)*len*.65];
-    const p3=[C(az)*len,.03-drop,Sf(az)*len];
-    for(let k=0;k<600;k++){
-      const t=Rn(),cp=b3(t,p0,p1,p2,p3);
-      const T=b3t(t,p0,p1,p2,p3);
-      const rad=lerp(.08,.015,t)*.8;
-      const pt=fillDisc(cp,T,rad);
-      const c=col(M.max(.01,cp[1]),38/360,41/360,.36,.46,.46,.58);
-      PUSH(pt.x,pt.y,pt.z,c[0],c[1],c[2]);
-    }
-  }
-
-  // ══════ TRUNK ══════════════════════════════════════════════
-  const trunkH=1.35;
-  for(let i=0;i<1500;i++){
-    const y=Rn()*trunkH+.03;
-    const rad=lerp(.20,.13,y/trunkH)*.8;
-    // Simple disc fill at this y (tangent = (0,1,0))
-    const rr=Sq(Rn())*rad,ang=Rn()*P*2;
-    const c=col(y,39/360,41/360,.38,.44,.50,.62);
-    PUSH(M.cos(ang)*rr,y,M.sin(ang)*rr,c[0],c[1],c[2]);
-  }
-
-  // ══════ BRANCHES: 15 main → sub → twig → leaf ═════════════
-  const NBR=15,brP=450,subP=180,twigP=80,tipP=80;
-  for(let b=0;b<NBR;b++){
-    // Branch origin on trunk
-    const tt=.07+(b/(NBR-1))*.65;
-    const y0=lerp(.15,trunkH*.88,tt);
-    const trR=lerp(.18,.11,tt)*.78;
-    const baseAz=b/NBR*P*2+(Rn()-.5)*.35;
-    const p0=[C(baseAz)*trR,y0,Sf(baseAz)*trR];
-    // Branch endpoint
-    const el=.06+Rn()*.3,len=.6+Rn()*.75;
-    const mx=C(baseAz)*C(el),my=Sf(el),mz=Sf(baseAz)*C(el);
-    const p2=[p0[0]+mx*len,p0[1]+my*len,p0[2]+mz*len];
-    // Control point: bow outward + upward, giving organic arc
-    const bow=.1+Rn()*.3;
-    const p1=[lerp(p0[0],p2[0],.42)+C(baseAz)*bow,lerp(p0[1],p2[1],.38)+.1+Rn()*.12,lerp(p0[2],p2[2],.42)+Sf(baseAz)*bow];
-
-    // Main branch
-    for(let k=0;k<brP;k++){
-      const t=Rn(),cp=b2(t,p0,p1,p2),T=b2t(t,p0,p1,p2);
-      const rad=lerp(.045,.02,t)*.7;
-      const pt=fillDisc(cp,T,rad);
-      const c=col(cp[1],38/360,42/360,.36,.42,.54,.74);
-      PUSH(pt.x,pt.y,pt.z,c[0],c[1],c[2]);
-    }
-    // Sub-branches
-    const nSub=2+M.floor(Rn()*3);
-    for(let s=0;s<nSub;s++){
-      const bt=.22+Rn()*.45;
-      const sb0=b2(bt,p0,p1,p2);
-      const saz=Rn()*P*2,sel=.05+Rn()*.35,slen=.14+Rn()*.3;
-      const sb2=[sb0[0]+C(saz)*C(sel)*slen,sb0[1]+Sf(sel)*slen,sb0[2]+Sf(saz)*C(sel)*slen];
-      const sb1=[lerp(sb0[0],sb2[0],.42)+(Rn()-.5)*.1,lerp(sb0[1],sb2[1],.38)+(Rn()-.5)*.08,lerp(sb0[2],sb2[2],.42)+(Rn()-.5)*.1];
-      for(let k=0;k<subP;k++){
-        const t2=Rn(),cp=b2(t2,sb0,sb1,sb2),T2=b2t(t2,sb0,sb1,sb2);
-        const rad2=lerp(.028,.014,t2)*.6;
-        const pt2=fillDisc(cp,T2,rad2);
-        const c2=col(cp[1],39/360,43/360,.34,.40,.60,.82);
-        PUSH(pt2.x,pt2.y,pt2.z,c2[0],c2[1],c2[2]);
-      }
-      // Twigs
-      const nTwig=1+M.floor(Rn()*3);
-      for(let w=0;w<nTwig;w++){
-        const wt=.3+Rn()*.45;
-        const tw0=b2(wt,sb0,sb1,sb2);
-        const waz=Rn()*P*2,wel=.05+Rn()*.32,wlen=.07+Rn()*.16;
-        const tw2=[tw0[0]+C(waz)*C(wel)*wlen,tw0[1]+Sf(wel)*wlen,tw0[2]+Sf(waz)*C(wel)*wlen];
-        const tw1=[lerp(tw0[0],tw2[0],.45)+(Rn()-.5)*.05,lerp(tw0[1],tw2[1],.4)+(Rn()-.5)*.04,lerp(tw0[2],tw2[2],.45)+(Rn()-.5)*.05];
-        for(let k=0;k<twigP;k++){
-          const t3=Rn(),cp=b2(t3,tw0,tw1,tw2),T3=b2t(t3,tw0,tw1,tw2);
-          const rad3=lerp(.016,.007,t3)*.5;
-          const pt3=fillDisc(cp,T3,rad3);
-          const c3=col(cp[1],40/360,44/360,.30,.38,.66,.88);
-          PUSH(pt3.x,pt3.y,pt3.z,c3[0],c3[1],c3[2]);
-        }
-      }
-      // Leaf cluster at sub-branch tip
-      for(let k=0;k<tipP;k++){
-        const cr=.09,phi=M.acos(2*Rn()-1),th=Rn()*P*2,rd=Sq(Rn())*cr;
-        const cpY=sb2[1]+rd*Sf(phi)*Sf(th)*.6;
-        const c4=col(cpY,41/360,44/360,.26,.34,.68,.90);
-        PUSH(sb2[0]+rd*Sf(phi)*C(th),cpY,sb2[2]+rd*C(phi),c4[0],c4[1],c4[2]);
-      }
-    }
-  }
-
-  // Spillover: scatter extra particles among branches ───────
-  while(ki<N){
-    const ci=M.floor(Rn()*NBR);
-    const tt=.07+(ci/(NBR-1))*.65;
-    const y0=lerp(.15,trunkH*.88,tt);
-    const trR=lerp(.18,.11,tt)*.78;
-    const baseAz=ci/NBR*P*2+(Rn()-.5)*.4;
-    const p0s=[C(baseAz)*trR,y0,Sf(baseAz)*trR];
-    const el=.06+Rn()*.3,len=.6+Rn()*.75;
-    const mx=C(baseAz)*C(el),my=Sf(el),mz=Sf(baseAz)*C(el);
-    const p2s=[p0s[0]+mx*len,p0s[1]+my*len,p0s[2]+mz*len];
-    const bow=.1+Rn()*.3;
-    const p1s=[lerp(p0s[0],p2s[0],.42)+C(baseAz)*bow,lerp(p0s[1],p2s[1],.38)+.1+Rn()*.12,lerp(p0s[2],p2s[2],.42)+Sf(baseAz)*bow];
-    const t=Rn(),cp=b2(t,p0s,p1s,p2s),T=b2t(t,p0s,p1s,p2s);
-    const rad=lerp(.045,.02,t)*.7;
-    const pt=fillDisc(cp,T,rad);
-    const c=col(cp[1],38/360,43/360,.34,.40,.56,.78);
-    PUSH(pt.x,pt.y,pt.z,c[0],c[1],c[2]);
+  const R=1.2;
+  for(let i=0;i<N;i++){
+    const j=i*3;
+    const phi=M.acos(2*Rn()-1);
+    const th=Rn()*P*2;
+    // Surface with slight thickness
+    const rr=R*(.88+Rn()*.12);
+    treePos[j]=rr*M.sin(phi)*M.cos(th);
+    treePos[j+1]=rr*M.sin(phi)*M.sin(th);
+    treePos[j+2]=rr*M.cos(phi);
+    const c=hsl(.12+Rn()*.04,.3+Rn()*.3,.55+Rn()*.35);
+    treeCol[j]=c.r;treeCol[j+1]=c.g;treeCol[j+2]=c.b;
   }
 }
-// ── Init particles to idle ──────────────────────────────────────
 for(let i=0;i<N;i++){
   const j=i*3;
   pos[j]=idlePos[j];vel[j]=(Rn()-.5)*.02;
@@ -302,14 +155,7 @@ for(let i=0;i<N;i++){
 function mkGeo(p,c){const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(p,3));g.setAttribute('color',new T.BufferAttribute(c,3));return g}
 const pGeo=mkGeo(pos,col);
 const pMat=new T.PointsMaterial({size:.028,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
-const treeMat=new T.PointsMaterial({size:.05,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
 const pts=new T.Points(pGeo,pMat);
-// Surface halo: soft glow rim on silhouette
-const hGeo=mkGeo(hPos,hCol);
-const hMat=new T.PointsMaterial({size:.12,map:softSprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.35});
-const haloPts=new T.Points(hGeo,hMat);
-hGeo.attributes.position.needsUpdate=true;hGeo.attributes.color.needsUpdate=true;
-haloPts.visible=false;
 const grp=new T.Group();grp.add(pts);scene.add(grp);
 
 // ── Ghost trails ────────────────────────────────────────────────
@@ -444,15 +290,15 @@ function setState(newState){
   prevState=state;state=newState;stateTime=0;
   if(newState===States.PULSING){pulseStart=performance.now();coreMat.opacity=0;pts.material=pMat;}
   if(newState===States.EXPLODING){explosionTime=performance.now();explosionMaxVel=0;triggerExplosion();pts.material=pMat;}
-  if(newState===States.FORMING_TREE){
+  if(newState===States.FORMING_SPHERE){
     copyTargets(treePos,treeCol);
-    debrisPts.visible=true;dMat.opacity=.85;
-    pts.material=treeMat;
+    debrisPts.visible=true;dMat.opacity=.65;
+    pts.material=pMat;
   }
-  if(newState===States.TREE){
-    if(prevState!==States.FORMING_TREE)copyTargets(treePos,treeCol);
-    debrisPts.visible=true;dMat.opacity=.6;
-    pts.material=treeMat;
+  if(newState===States.SPHERE){
+    if(prevState!==States.FORMING_SPHERE)copyTargets(treePos,treeCol);
+    debrisPts.visible=true;dMat.opacity=.5;
+    pts.material=pMat;
   }
   if(newState===States.IDLE){
     copyTargets(idlePos,idleCol);debrisPts.visible=false;dMat.opacity=0;
@@ -647,22 +493,21 @@ function tick(){
     H.textContent=HINTS[4];
     if(handPresent){
       addCirclePoint(fingerWorld);
-      if(detectCircle()){circleDetected=true;setState(States.FORMING_TREE);}
+      if(detectCircle()){circleDetected=true;setState(States.FORMING_SPHERE);}
     }
     // Timeout: if idle too long, go back to IDLE
     if(stateTime>20&&!handPresent){setState(States.IDLE);}
   }
 
-  if(state===States.FORMING_TREE){
+  if(state===States.FORMING_SPHERE){
     H.textContent=HINTS[5];
-    // Check if particles settled
     let avgD=0;
     for(let i=0;i<N;i++){const j=i*3;avgD+=Sq((pos[j]-tgt[j])**2+(pos[j+1]-tgt[j+1])**2+(pos[j+2]-tgt[j+2])**2);}
     avgD/=N;
-    if(avgD<.06&&stateTime>1.5){setState(States.TREE);}
+    if(avgD<.06&&stateTime>1.5){setState(States.SPHERE);}
   }
 
-  if(state===States.TREE){
+  if(state===States.SPHERE){
     H.textContent=HINTS[6];
   }
 
@@ -827,8 +672,8 @@ function tick(){
     dGeo.attributes.position.needsUpdate=true;dGeo.attributes.color.needsUpdate=true;
   }
 
-  if(state===States.FORMING_TREE){
-    // Spring to target positions
+  if(state===States.FORMING_SPHERE){
+    // Spring to sphere positions
     const springK=8,springD=5;
     for(let i=0;i<N;i++){
       const j=i*3;
@@ -836,7 +681,6 @@ function tick(){
       vel[j+1]+=((tgt[j+1]-pos[j+1])*springK-vel[j+1]*springD)*dt;
       vel[j+2]+=((tgt[j+2]-pos[j+2])*springK-vel[j+2]*springD)*dt;
     }
-    // Debris dissipates
     for(let i=0;i<DEBRIS_N;i++){
       const j=i*3;
       dVel[j]+=((Rn()-.5)*.08-dVel[j]*1.5)*dt;
@@ -846,40 +690,29 @@ function tick(){
     pMat.opacity=lerp(pMat.opacity,.85,3*dt);
   }
 
-  if(state===States.TREE){
-    // Gentle wobble toward treePos, color toward treeCol
+  if(state===States.SPHERE){
+    // Hold position, drift toward colors
     for(let i=0;i<N;i++){
       const j=i*3;
-      const k=6,dmp=4;
-      vel[j]+=((treePos[j]-pos[j])*k-vel[j]*dmp+((Rn()-.5)*.015))*dt;
-      vel[j+1]+=((treePos[j+1]-pos[j+1])*k-vel[j+1]*dmp+((Rn()-.5)*.015))*dt;
-      vel[j+2]+=((treePos[j+2]-pos[j+2])*k-vel[j+2]*dmp+((Rn()-.5)*.008))*dt;
-      tgtCol[j]=lerp(tgtCol[j],treeCol[j],4*dt);
-      tgtCol[j+1]=lerp(tgtCol[j+1],treeCol[j+1],4*dt);
-      tgtCol[j+2]=lerp(tgtCol[j+2],treeCol[j+2],4*dt);
+      const k=5,dmp=3.5;
+      vel[j]+=((treePos[j]-pos[j])*k-vel[j]*dmp+((Rn()-.5)*.01))*dt;
+      vel[j+1]+=((treePos[j+1]-pos[j+1])*k-vel[j+1]*dmp+((Rn()-.5)*.01))*dt;
+      vel[j+2]+=((treePos[j+2]-pos[j+2])*k-vel[j+2]*dmp+((Rn()-.5)*.006))*dt;
+      tgtCol[j]=lerp(tgtCol[j],treeCol[j],3*dt);
+      tgtCol[j+1]=lerp(tgtCol[j+1],treeCol[j+1],3*dt);
+      tgtCol[j+2]=lerp(tgtCol[j+2],treeCol[j+2],3*dt);
     }
-    // Micro-flicker: update only 5% of particles per frame
-    const fc=M.floor(N*.05),fs=M.floor(Rn()*(N-fc));
-    for(let i=fs;i<fs+fc;i++){
-      flickerP[i]+=dt;
-      const bMul=1.08+.07*M.sin(flickerP[i]*6.7);
-      const j=i*3;
-      tgtCol[j]=lerp(tgtCol[j],treeCol[j]*bMul,8*dt);
-      tgtCol[j+1]=lerp(tgtCol[j+1],treeCol[j+1]*bMul,8*dt);
-      tgtCol[j+2]=lerp(tgtCol[j+2],treeCol[j+2]*bMul,8*dt);
-    }
-    // Incense smoke rising from canopy
+    // Debris orbit around sphere
     for(let i=0;i<DEBRIS_N;i++){
       const j=i*3;
-      dVel[j]+=((Rn()-.5)*.05-dVel[j]*.4)*dt;
-      dVel[j+1]+=.07*dt;
-      dVel[j+2]+=((Rn()-.5)*.05-dVel[j+2]*.4)*dt;
-      if(dPos[j+1]>3.8||dPos[j+1]<-1){
-        const ang=Rn()*P*2,rad=Rn()*1.4;
-        dPos[j]=C(ang)*rad;dPos[j+1]=1.5+Rn()*1.8;dPos[j+2]=Sf(ang)*rad;
-        dVel[j]=(Rn()-.5)*.06;dVel[j+1]=.03+Rn()*.1;dVel[j+2]=(Rn()-.5)*.06;
-      }
-      dCol[j]=lerp(dCol[j],.98,2*dt);dCol[j+1]=lerp(dCol[j+1],.85,2*dt);dCol[j+2]=lerp(dCol[j+2],.5,2*dt);
+      const dx=dPos[j],dy=dPos[j+1],dz=dPos[j+2];
+      const d=Sq(dx*dx+dy*dy+dz*dz)||.01;
+      dVel[j]+=((-dx*.8-dy*.5)*.3-dVel[j]*.7)*dt;
+      dVel[j+1]+=((-dy*.8+dx*.3)*.3-dVel[j+1]*.7)*dt;
+      dVel[j+2]+=((-dz*.8)*.3-dVel[j+2]*.7)*dt;
+      // Keep at ~1.5 radius
+      if(d>2.5||d<1.0){dPos[j]=1.5*dx/d;dPos[j+1]=1.5*dy/d;dPos[j+2]=1.5*dz/d;}
+      dCol[j]=lerp(dCol[j],.95,2*dt);dCol[j+1]=lerp(dCol[j+1],.8,2*dt);dCol[j+2]=lerp(dCol[j+2],.45,2*dt);
     }
     dGeo.attributes.position.needsUpdate=true;dGeo.attributes.color.needsUpdate=true;
     pts.material.opacity=lerp(pts.material.opacity,.88,2*dt);
@@ -909,22 +742,21 @@ function tick(){
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // TREE interactions
+  // SPHERE interactions
   // ═══════════════════════════════════════════════════════════════
-  if(state===States.TREE){
+  if(state===States.SPHERE){
     if(handPresent){
-      const tgtScale=1.8-openness*1.5;
+      const tgtScale=2.5-openness*2.0; // open=0.5, close=2.5
       grp.scale.lerp(new T.Vector3(tgtScale,tgtScale,tgtScale),8*dt);
-      const rotSpd=pointDir*2.5;
-      grp.rotation.y+=rotSpd*dt;
+      grp.rotation.y+=pointDir*1.5*dt;
     }else{
-      grp.rotation.y+=dt*.15;
-      grp.scale.lerp(new T.Vector3(1,1,1),1.5*dt);
+      grp.rotation.y+=dt*.2;
+      grp.scale.lerp(new T.Vector3(1.2,1.2,1.2),1.5*dt);
     }
-    const sName='🌳 光之树';
+    const sName='🔮 光球';
     if(handPresent){
-      const l=openness>.55?'🖐':openness<.22?'✊':'✋';
-      S.textContent=sName+' · '+l+(pointDir<-.08?' ↺':pointDir>.08?' ↻':'');
+      const l=openness>.5?'🖐':openness<.2?'✊':'✋';
+      S.textContent=sName+' · '+l;
       S.className='on';
     }else{
       S.textContent=sName;S.className='on';
@@ -940,9 +772,9 @@ function tick(){
   }else if(state===States.EXPLODING){
     S.textContent='💥 宇宙大爆炸！';S.className='on';
   }else if(state===States.SCATTERED){
-    S.textContent='✨ 画一个圆来创造光之树';S.className=handPresent?'on':'';
-  }else if(state===States.FORMING_TREE){
-    S.textContent='🌳 光之树正在生长…';S.className='on';
+    S.textContent='✨ 画一个圆来召唤光球';S.className=handPresent?'on':'';
+  }else if(state===States.FORMING_SPHERE){
+    S.textContent='🔮 光球正在凝聚…';S.className='on';
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -981,7 +813,7 @@ addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
 });
 // DEBUG: press 't' to force TREE state for visual testing
-addEventListener('keydown',e=>{if(e.key==='t'&&state!==States.TREE){copyTargets(treePos,treeCol);prevState=States.SCATTERED;state=States.TREE;stateTime=0;debrisPts.visible=true;dMat.opacity=.6;pts.material=treeMat;}});
+addEventListener('keydown',e=>{if(e.key==='s'&&state!==States.SPHERE){copyTargets(treePos,treeCol);prevState=States.SCATTERED;state=States.SPHERE;stateTime=0;debrisPts.visible=true;dMat.opacity=.5;pts.material=pMat;}});
 
 // ═══════════════════════════════════════════════════════════════════
 // START
