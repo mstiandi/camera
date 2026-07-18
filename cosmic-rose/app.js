@@ -43,6 +43,12 @@ const scene=new T.Scene();scene.background=new T.Color(0x010108);
 const camera=new T.PerspectiveCamera(50,innerWidth/innerHeight,.5,50);
 camera.position.set(0,.3,8);camera.lookAt(0,0,0);
 
+// ── Lighting for 3D geometry ────────────────────────────────────
+const ambient=new T.AmbientLight(0x221122,.7);scene.add(ambient);
+const keyLight=new T.DirectionalLight(0xffffff,1.8);keyLight.position.set(2,3,4);scene.add(keyLight);
+const fillLight=new T.DirectionalLight(0x443355,.4);fillLight.position.set(-1,-.5,-1);scene.add(fillLight);
+const rimLight=new T.DirectionalLight(0xffcccc,.5);rimLight.position.set(0,1,-2);scene.add(rimLight);
+
 const comp=new EffectComposer(ren);
 comp.addPass(new RenderPass(scene,camera));
 const bloom=new UnrealBloomPass(new T.Vector2(innerWidth,innerHeight),1.2,.35,.5);
@@ -410,6 +416,209 @@ bgStars.renderOrder=-1;bgStars.material.depthTest=false;
 scene.add(bgStars);
 
 // ═══════════════════════════════════════════════════════════════════
+// 3D ROSE AND BUTTERFLY GEOMETRY
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Shared materials ─────────────────────────────────────────────
+const petalMat=new T.MeshStandardMaterial({color:0xdd3355,roughness:.5,metalness:.02,side:T.FrontSide,vertexColors:true,transparent:true,opacity:0,depthWrite:true,emissive:0x1a0005,emissiveIntensity:.15});
+const sepalMat=new T.MeshStandardMaterial({color:0x2d5a1e,roughness:.7,metalness:0,side:T.DoubleSide,transparent:true,opacity:0,depthWrite:true,emissive:0x051000,emissiveIntensity:.1});
+const stemMat=new T.MeshStandardMaterial({color:0x2a5a1a,roughness:.75,metalness:0,transparent:true,opacity:0,depthWrite:true});
+const leafMat=new T.MeshStandardMaterial({color:0x1a4a1a,roughness:.6,metalness:0,side:T.DoubleSide,transparent:true,opacity:0,depthWrite:true,emissive:0x020d02,emissiveIntensity:.1});
+const thornMat=new T.MeshStandardMaterial({color:0x5a3a1a,roughness:.8,metalness:0,transparent:true,opacity:0,depthWrite:true});
+const wingMat=new T.MeshStandardMaterial({roughness:.5,metalness:0,side:T.DoubleSide,vertexColors:true,transparent:true,opacity:0,depthWrite:true,emissive:0x050000,emissiveIntensity:.1});
+const bodyMat=new T.MeshStandardMaterial({color:0x1a1a1a,roughness:.4,metalness:.1,transparent:true,opacity:0,depthWrite:true});
+const antennaMat=new T.MeshStandardMaterial({color:0x1a1a1a,roughness:.3,metalness:.2,transparent:true,opacity:0,depthWrite:true});
+const all3DMats=[petalMat,sepalMat,stemMat,leafMat,thornMat,wingMat,bodyMat,antennaMat];
+function set3DOpacity(v){for(const m of all3DMats)m.opacity=v;}
+
+// ── Petal: bezier surface BufferGeometry ─────────────────────────
+function createPetalGeo(pLen,mW,cupD){
+  const uS=20,vS=10,verts=[],cols=[],uvs=[],idx=[];
+  // Spoon curve: base curves forward, mid dips back, tip curls forward again
+  const cz0=0,cz1=cupD*.6,cz2=-cupD*.15,cz3=cupD*.25;
+  function bz(u){const t=u,_1t=1-t;return _1t*_1t*_1t*cz0+3*_1t*_1t*t*cz1+3*_1t*t*t*cz2+t*t*t*cz3;}
+  for(let iu=0;iu<=uS;iu++){
+    const u=iu/uS;
+    // Width: peaks at u≈0.35, never negative
+    const wF=M.pow(M.sin(P*(u*.6+.18)),.65);
+    const taper=1-u*.2,y=u*pLen,cz=bz(u);
+    for(let iv=0;iv<=vS;iv++){
+      const v=(iv/vS)*2-1,x=v*wF*mW*taper;
+      // Deep lateral cupping (U-shape cross section)
+      const lateralZ=v*v*cupD*.45;
+      verts.push(x,y,cz+lateralZ);uvs.push(u,(v+1)/2);
+      // Vertex color: deep burgundy at base → rich red at tip
+      const baseDark=1-M.pow(u,.35)*.65,edgeFade=M.abs(v)*.3;
+      const r=.48-baseDark*.22+edgeFade*.18,g=.04+baseDark*.06+edgeFade*.08;
+      cols.push(r,g,.02+edgeFade*.1);
+    }
+  }
+  for(let iu=0;iu<uS;iu++)for(let iv=0;iv<vS;iv++){
+    const a=iu*(vS+1)+iv,b=a+1,c=a+(vS+1),d=c+1;idx.push(a,b,d,a,d,c);
+  }
+  const g=new T.BufferGeometry();g.setAttribute('position',new T.Float32BufferAttribute(verts,3));
+  g.setAttribute('color',new T.Float32BufferAttribute(cols,3));
+  g.setAttribute('uv',new T.Float32BufferAttribute(uvs,2));g.setIndex(idx);g.computeVertexNormals();return g;
+}
+
+// ── Rose assembly: 55 petals, 3 nested rings, heavy overlap ─────
+function buildRose(){
+  const rg=new T.Group(),ga=P*(3-M.sqrt(5));
+  const sGeo=createPetalGeo(.28,.14,.1);   // small: tight bud
+  const mGeo=createPetalGeo(.42,.2,.13);    // medium: inner ring
+  const lGeo=createPetalGeo(.58,.26,.16);   // large: outer ring
+
+  // ── Ring 0: tight center bud (12 petals, nearly vertical) ────
+  const R0=12;
+  for(let i=0;i<R0;i++){
+    const t=i/R0,angle=i*ga*1.8; // tighter angular spacing
+    const r=.02+t*.1;
+    const h=t*.22,tilt=P/7+t*.3;
+    const scl=.35+t*.25;
+    const petal=new T.Mesh(sGeo,petalMat);
+    petal.position.set(C(angle)*r,h,Sf(angle)*r);
+    petal.rotation.order='YXZ';
+    petal.rotation.y=angle;petal.rotation.x=tilt;petal.rotation.z=(t-.5)*.25;
+    petal.scale.setScalar(scl);rg.add(petal);
+  }
+
+  // ── Ring 1: mid layer (18 petals, moderately open) ───────────
+  const R1=18;
+  for(let i=0;i<R1;i++){
+    const t=i/R1,angle=i*ga*1.5;
+    const r=.1+t*.25;
+    const h=.1+t*.38,tilt=P/5.5+t*.55;
+    const scl=.52+t*.23;
+    const petal=new T.Mesh(mGeo,petalMat);
+    petal.position.set(C(angle)*r,h,Sf(angle)*r);
+    petal.rotation.order='YXZ';
+    petal.rotation.y=angle;petal.rotation.x=tilt;petal.rotation.z=(t-.5)*.3;
+    petal.scale.setScalar(scl);rg.add(petal);
+  }
+
+  // ── Ring 2: outer layer (25 petals, wider cup) ───────────────
+  const R2=25;
+  for(let i=0;i<R2;i++){
+    const t=i/R2,angle=i*ga*1.3;
+    const r=.22+t*.35;
+    const h=.08+t*.45,tilt=P/4.5+t*.7;
+    const scl=.65+t*.2;
+    const petal=new T.Mesh(lGeo,petalMat);
+    petal.position.set(C(angle)*r,h,Sf(angle)*r);
+    petal.rotation.order='YXZ';
+    petal.rotation.y=angle;petal.rotation.x=tilt;petal.rotation.z=(t-.5)*.4;
+    petal.scale.setScalar(scl);rg.add(petal);
+  }
+
+  return rg;
+}
+
+// ── Sepal: LatheGeometry cup ─────────────────────────────────────
+function buildSepal(){
+  const pts=[new T.Vector2(0,0),new T.Vector2(.04,.02),new T.Vector2(.18,.06),new T.Vector2(.32,.14),new T.Vector2(.28,.22),new T.Vector2(.12,.3)];
+  const s=new T.Mesh(new T.LatheGeometry(pts,32),sepalMat);s.position.set(0,-.08,0);return s;
+}
+
+// ── Stem: TubeGeometry bezier ────────────────────────────────────
+const stemCurve=new T.CubicBezierCurve3(new T.Vector3(0,0,0),new T.Vector3(.06,-.7,.02),new T.Vector3(-.02,-1.5,-.01),new T.Vector3(0,-2.2,0));
+function buildStem(){return new T.Mesh(new T.TubeGeometry(stemCurve,48,.025,12,false),stemMat);}
+
+// ── Leaf: teardrop surface with vein ─────────────────────────────
+function createLeafGeo(len,mW){
+  const uS=16,vS=6,verts=[],uvs=[],idx=[];
+  for(let iu=0;iu<=uS;iu++){
+    const u=iu/uS,wP=M.sin(P*(u*.7+.15)),y=u*len,vZ=(1-u)*.008;
+    for(let iv=0;iv<=vS;iv++){
+      const v=(iv/vS)*2-1,w=wP*mW*.5,x=v*w,absV=Ab(v);
+      verts.push(x,y,vZ*M.max(0,1-absV*3));uvs.push(u,(v+1)/2);
+    }
+  }
+  for(let iu=0;iu<uS;iu++)for(let iv=0;iv<vS;iv++){
+    const a=iu*(vS+1)+iv,b=a+1,c=a+(vS+1),d=c+1;idx.push(a,b,d,a,d,c);
+  }
+  const g=new T.BufferGeometry();g.setAttribute('position',new T.Float32BufferAttribute(verts,3));
+  g.setAttribute('uv',new T.Float32BufferAttribute(uvs,2));g.setIndex(idx);g.computeVertexNormals();return g;
+}
+function buildLeaves(){
+  const lg=new T.Group(),lGeo=createLeafGeo(.55,.18);
+  const pl=[{t:.38,ang:-P*.28,fl:true},{t:.56,ang:P*.25,fl:false}];
+  for(const p of pl){
+    const pt=stemCurve.getPointAt(p.t),lf=new T.Mesh(lGeo,leafMat);
+    lf.position.copy(pt);lf.rotation.set(P*.35,p.ang,0);if(p.fl)lf.scale.x=-1;lg.add(lf);
+  }
+  return lg;
+}
+
+// ── Thorns: ConeGeometry ─────────────────────────────────────────
+function buildThorns(){
+  const tg=new T.Group(),tGeo=new T.ConeGeometry(.015,.09,6,8);
+  const tb=[{t:.22,d:-1},{t:.4,d:1},{t:.6,d:-1}];
+  for(const b of tb){
+    const pt=stemCurve.getPointAt(b.t),t=new T.Mesh(tGeo,thornMat);
+    t.position.copy(pt);t.rotation.z=b.d*P*.55;t.rotation.x=P*.15;tg.add(t);
+  }
+  return tg;
+}
+
+// ── Full rose ────────────────────────────────────────────────────
+const roseGroup=buildRose();
+roseGroup.add(buildSepal());roseGroup.add(buildStem());
+roseGroup.add(buildLeaves());roseGroup.add(buildThorns());
+
+// ═══════════════════════════════════════════════════════════════════
+// BUTTERFLY
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Wing: parametric surface with vertex colors ──────────────────
+function createWingGeo(isFore,isLeft){
+  const sign=isLeft?-1:1,uS=18,vS=10,verts=[],cols=[],idx=[];
+  for(let iu=0;iu<=uS;iu++){
+    const u=iu/uS,sL=isFore?.78:.58;
+    for(let iv=0;iv<=vS;iv++){
+      const v=iv/vS,wP=M.sin(P*(M.pow(u,.5)*.75+.1));
+      const lx=u*sL,ly=(v-.5)*2*wP*(isFore?.42:.38);
+      const x=sign*(lx*.55+Ab(ly)*.15);
+      const y=lx*(isFore?.5:.02)-Ab(ly)*.08+(isFore?.02:-.15);
+      const z=M.cos(u*P*.85)*.04+(v-.5)*.03;
+      verts.push(x,y,z);
+      const ed=Math.min(v,1-v)*.7,td=1-u,md=Math.min(ed,td);
+      const isBlack=md<.12||(u>.82&&v>.25&&v<.75);
+      const isWhite=isFore&&u>.65&&u<.85&&md>.04&&md<.14&&((v>.15&&v<.35)||(v>.65&&v<.85));
+      if(isWhite){cols.push(.95,.93,.85);}else if(isBlack){cols.push(.04,.02,.02);}
+      else{const b=1-M.max(0,(md-.12)*3);cols.push(.88+b*.1,.42+b*.15+Rn()*.02,.06+b*.04);}
+    }
+  }
+  for(let iu=0;iu<uS;iu++)for(let iv=0;iv<vS;iv++){
+    const a=iu*(vS+1)+iv,b=a+1,c=a+(vS+1),d=c+1;idx.push(a,b,d,a,d,c);
+  }
+  const g=new T.BufferGeometry();g.setAttribute('position',new T.Float32BufferAttribute(verts,3));
+  g.setAttribute('color',new T.Float32BufferAttribute(cols,3));g.setIndex(idx);g.computeVertexNormals();return g;
+}
+
+// ── Butterfly assembly ───────────────────────────────────────────
+const butterflyGroup=new T.Group();
+const bBody=new T.Mesh(new T.SphereGeometry(1,16,12),bodyMat);bBody.scale.set(.03,.05,.28);butterflyGroup.add(bBody);
+const leftWingGroup=new T.Group(),rightWingGroup=new T.Group();
+leftWingGroup.add(new T.Mesh(createWingGeo(true,true),wingMat));
+leftWingGroup.add(new T.Mesh(createWingGeo(false,true),wingMat));
+rightWingGroup.add(new T.Mesh(createWingGeo(true,false),wingMat));
+rightWingGroup.add(new T.Mesh(createWingGeo(false,false),wingMat));
+butterflyGroup.add(leftWingGroup);butterflyGroup.add(rightWingGroup);
+// Antennae
+function buildAntenna(isLeft){
+  const s=isLeft?-1:1;
+  const c=new T.CubicBezierCurve3(new T.Vector3(0,.06,.1),new T.Vector3(s*.04,.1,.12),new T.Vector3(s*.1,.15,.08),new T.Vector3(s*.16,.18,.02));
+  return new T.Mesh(new T.TubeGeometry(c,20,.005,8,false),antennaMat);
+}
+butterflyGroup.add(buildAntenna(true));butterflyGroup.add(buildAntenna(false));
+butterflyGroup.visible=false;
+
+// ── Model group (child of grp) ───────────────────────────────────
+const modelGroup=new T.Group();modelGroup.visible=false;
+modelGroup.add(roseGroup);modelGroup.add(butterflyGroup);
+grp.add(modelGroup);
+
+// ═══════════════════════════════════════════════════════════════════
 // GESTURE DETECTION
 // ═══════════════════════════════════════════════════════════════════
 let handPresent=false,lastHandTime=0;
@@ -492,12 +701,32 @@ function setState(newState){
   prevState=state;state=newState;stateTime=0;
   if(newState===States.PULSING){pulseStart=performance.now();coreMat.opacity=0;}
   if(newState===States.EXPLODING){explosionTime=performance.now();explosionMaxVel=0;triggerExplosion();}
-  if(newState===States.FORMING_ROSE){copyTargets(rosePos,roseCol);}
-  if(newState===States.ROSE){if(prevState!==States.BUTTERFLY)copyTargets(rosePos,roseCol);}
-  if(newState===States.BUTTERFLY){copyTargets(bflyPos,bflyCol);twoHandCd=1.5;}
-  if(newState===States.IDLE){copyTargets(idlePos,idleCol);debrisPts.visible=false;dMat.opacity=0;glowShell.visible=false;plantPts.visible=false;plantMat.opacity=0;}
-  if(newState===States.ROSE||newState===States.BUTTERFLY){plantPts.visible=true;plantMat.opacity=.9;}
-  if(newState===States.SCATTERED){circleBuf.length=0;dMat.opacity=.85;debrisPts.visible=true;}
+  if(newState===States.FORMING_ROSE){
+    copyTargets(rosePos,roseCol);
+    modelGroup.visible=true;roseGroup.visible=true;butterflyGroup.visible=false;
+    set3DOpacity(0);roseGroup.scale.setScalar(.3);
+  }
+  if(newState===States.ROSE){
+    if(prevState!==States.BUTTERFLY)copyTargets(rosePos,roseCol);
+    modelGroup.visible=true;roseGroup.visible=true;butterflyGroup.visible=false;
+  }
+  if(newState===States.BUTTERFLY){
+    copyTargets(bflyPos,bflyCol);twoHandCd=1.5;
+    modelGroup.visible=true;roseGroup.visible=false;butterflyGroup.visible=true;
+  }
+  if(newState===States.IDLE){
+    copyTargets(idlePos,idleCol);debrisPts.visible=false;dMat.opacity=0;
+    glowShell.visible=false;plantPts.visible=false;plantMat.opacity=0;
+    modelGroup.visible=false;set3DOpacity(0);
+  }
+  if(newState===States.ROSE||newState===States.BUTTERFLY){
+    plantPts.visible=true;plantMat.opacity=.9;
+    set3DOpacity(1);roseGroup.scale.setScalar(1);butterflyGroup.scale.setScalar(1);
+  }
+  if(newState===States.SCATTERED){
+    circleBuf.length=0;dMat.opacity=.85;debrisPts.visible=true;
+    modelGroup.visible=false;set3DOpacity(0);
+  }
 }
 
 function copyTargets(posArr,colArr){
@@ -917,6 +1146,25 @@ function tick(){
       plantMat.opacity=lerp(plantMat.opacity,.9,3*dt);
       plantPts.visible=true;
     }
+    // ═══════════════════════════════════════════════════════════════
+    // 3D MODEL CROSSFADE TRANSITION
+    // ═══════════════════════════════════════════════════════════════
+    if(state===States.FORMING_ROSE){
+      const mf=M.min(1,stateTime*2.5),pf=1-mf;
+      pMat.opacity=lerp(pMat.opacity,pf*.85,3*dt);
+      dMat.opacity=lerp(dMat.opacity,pf*.7,3*dt);
+      plantMat.opacity=lerp(plantMat.opacity,.5+pf*.4,3*dt);
+      set3DOpacity(lerp(petalMat.opacity,mf,4*dt));
+      const ts=.3+mf*.7;roseGroup.scale.lerp(new T.Vector3(ts,ts,ts),3*dt);
+    }
+    if(state===States.ROSE||state===States.BUTTERFLY){
+      pMat.opacity=lerp(pMat.opacity,.05,2*dt);
+      dMat.opacity=lerp(dMat.opacity,0,2*dt);
+      plantMat.opacity=lerp(plantMat.opacity,.5,2*dt);
+      set3DOpacity(lerp(petalMat.opacity,1,3*dt));
+      const ag=state===States.ROSE?roseGroup:butterflyGroup;
+      ag.scale.lerp(new T.Vector3(1,1,1),3*dt);
+    }
   }
 
   // ── Apply velocity & update positions ─────────────────────────
@@ -956,15 +1204,18 @@ function tick(){
       grp.rotation.y+=rotSpd*dt;
       // Butterfly wing flap
       if(state===States.BUTTERFLY){
-        const flapFreq=3.5;
-        const flapAmp=.08;
-        grp.scale.x=lerp(grp.scale.x,grp.scale.y*(1+flapAmp*M.sin(now*.001*flapFreq*P*2)),2*dt);
+        const fa=M.sin(now*.001*3.5*P*2)*.35;
+        leftWingGroup.rotation.y=lerp(leftWingGroup.rotation.y,fa,5*dt);
+        rightWingGroup.rotation.y=lerp(rightWingGroup.rotation.y,-fa,5*dt);
       }
     }else{
       // Auto-rotate slowly
       grp.rotation.y+=dt*(state===States.BUTTERFLY?.25:.15);
       grp.scale.lerp(new T.Vector3(1,1,1),1.5*dt);
-      if(state===States.BUTTERFLY)grp.scale.x=lerp(grp.scale.x,1,2*dt);
+      if(state===States.BUTTERFLY){
+        leftWingGroup.rotation.y=lerp(leftWingGroup.rotation.y,0,3*dt);
+        rightWingGroup.rotation.y=lerp(rightWingGroup.rotation.y,0,3*dt);
+      }
     }
     // Status text
     const sName=state===States.ROSE?'🌹 玫瑰':'🦋 蝴蝶';
