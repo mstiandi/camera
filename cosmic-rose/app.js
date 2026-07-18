@@ -9,11 +9,13 @@ const M=Math,P=M.PI,C=M.cos,Sf=M.sin,Sq=M.sqrt,Ab=M.abs,Rn=M.random;
 const lerp=(a,b,t)=>a+(b-a)*t;
 const hsl=(h,s,l)=>{const c=new T.Color();c.setHSL(h,s,l);return c};
 const dist=(x1,y1,x2,y2)=>Sq((x1-x2)**2+(y1-y2)**2);
+const evB=(pts,t)=>{if(pts.length===4){const u=1-t;return[u*u*u*pts[0][0]+3*u*u*t*pts[1][0]+3*u*t*t*pts[2][0]+t*t*t*pts[3][0],u*u*u*pts[0][1]+3*u*u*t*pts[1][1]+3*u*t*t*pts[2][1]+t*t*t*pts[3][1],u*u*u*pts[0][2]+3*u*u*t*pts[1][2]+3*u*t*t*pts[2][2]+t*t*t*pts[3][2]];}else{const u=1-t;return[u*u*pts[0][0]+2*u*t*pts[1][0]+t*t*pts[2][0],u*u*pts[0][1]+2*u*t*pts[1][1]+t*t*pts[2][1],u*u*pts[0][2]+2*u*t*pts[1][2]+t*t*pts[2][2]];}};
+;
 
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const N=2500,RING_POOL=4;
+const N=12000,RING_POOL=4;
 const States={IDLE:0,GATHERING:1,PULSING:2,EXPLODING:3,SCATTERED:4,FORMING_TREE:5,TREE:6};
 const HINTS=[
   '伸出食指召唤星辰',
@@ -33,31 +35,34 @@ let armParticles=null,pillarUp=null,pillarDown=null; // particle role arrays
 // ═══════════════════════════════════════════════════════════════════
 // THREE.JS SETUP
 // ═══════════════════════════════════════════════════════════════════
-const ren=new T.WebGLRenderer({antialias:false});
-ren.setPixelRatio(M.min(devicePixelRatio,2));
+const ren=new T.WebGLRenderer({antialias:false,preserveDrawingBuffer:true});
+ren.setPixelRatio(M.min(devicePixelRatio,1));
 ren.setSize(innerWidth,innerHeight);
-ren.domElement.style.background='radial-gradient(ellipse at center,#0a0a2e 0%,#030310 40%,#010108 100%)';
+ren.domElement.style.background='radial-gradient(ellipse at center,#1a1410 0%,#0a0808 40%,#010108 100%)';
 document.body.prepend(ren.domElement);
 
 const scene=new T.Scene();scene.background=new T.Color(0x010108);
 const camera=new T.PerspectiveCamera(50,innerWidth/innerHeight,.5,50);
-camera.position.set(0,.3,8);camera.lookAt(0,0,0);
+camera.position.set(0,.7,6.5);camera.lookAt(0,1.05,0);
 
 const comp=new EffectComposer(ren);
 comp.addPass(new RenderPass(scene,camera));
-const bloom=new UnrealBloomPass(new T.Vector2(innerWidth,innerHeight),1.2,.35,.5);
+const bloom=new UnrealBloomPass(new T.Vector2(innerWidth,innerHeight),.55,.35,.38);
 comp.addPass(bloom);
 
 // ── Sprite ──────────────────────────────────────────────────────
 function mkSprite(sz){
   const c=document.createElement('canvas');c.width=sz;c.height=sz;
   const x=c.getContext('2d'),g=x.createRadialGradient(sz/2,sz/2,0,sz/2,sz/2,sz/2);
-  g.addColorStop(0,'#fff');g.addColorStop(.04,'rgba(255,255,255,.97)');
-  g.addColorStop(.15,'rgba(255,255,255,.4)');g.addColorStop(.45,'rgba(255,255,255,.03)');
-  g.addColorStop(1,'transparent');x.fillStyle=g;x.fillRect(0,0,sz,sz);
+  g.addColorStop(0,'rgba(255,255,255,1)');
+  g.addColorStop(.04,'rgba(255,255,254,.92)');
+  g.addColorStop(.12,'rgba(255,252,248,.45)');
+  g.addColorStop(.25,'rgba(255,245,235,.08)');
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  x.fillStyle=g;x.fillRect(0,0,sz,sz);
   return new T.CanvasTexture(c);
 }
-const sprite=mkSprite(128);
+const sprite=mkSprite(64);
 
 // Sharp shard sprite — angular fragments distinct from soft star glow
 function mkShardSprite(sz){
@@ -108,66 +113,57 @@ const treePos=new Float32Array(N*3),treeCol=new Float32Array(N*3);
   }
 }
 
-// Compute tree shape: trunk + 5 branches + sub-branches + canopy
+// Compute tree shape — 3D VOLUME SILHOUETTE ────────────────────
 {
-  const alongLine=(t,ax,ay,az,bx,by,bz,radA,radB)=>{
-    const u=1-t,x=u*ax+t*bx+(Math.random()-.5)*(radA+t*(radB-radA))*1.2;
-    const y_=u*ay+t*by+(Math.random()-.5)*(radA+t*(radB-radA))*.6;
-    const z=u*az+t*bz+(Math.random()-.5)*(radA+t*(radB-radA))*1.2;
-    return{x,y:y_,z};
+  // maxRadius(y): defines tree outer boundary at each height
+  const mr=y=>{
+    y=M.max(0,y);
+    if(y<.08)return lerp(.65,.42,y/.08);           // root plate
+    if(y<.35)return lerp(.42,.14,(y-.08)/.27);      // root taper
+    if(y<1.25)return .14+M.sin(y*2.1)*.02;          // trunk (slight gnarl)
+    if(y<2.15)return lerp(.14,1.15,(y-1.25)/.9);    // canopy spread
+    if(y<2.85)return 1.15-M.pow((y-2.15)/.7,2)*.3;  // crown broad
+    if(y<3.35)return lerp(1.15,.03,(y-2.85)/.5);    // dome top
+    return .02;
+  };
+  // color (h,s,l) at height y — warm cream at base, pale gold in canopy
+  const yc=(y,hue0,hue1,sat0,sat1,lit0,lit1)=>{
+    const t=M.min(1,y/2.7);
+    const c=hsl(lerp(hue0,hue1,t),lerp(sat0,sat1,t),lerp(lit0,lit1,t));
+    return[c.r,c.g,c.b];
+  };
+  // Root plate: dense disc at base ──────────────────────────────
+  for(let i=0;i<800;i++){
+    const ang=Rn()*P*2,y=Rn()*.08,rr=Sq(Rn())*mr(y);
+    const j=i*3;treePos[j]=C(ang)*rr;treePos[j+1]=y;treePos[j+2]=Sf(ang)*rr;
+    const c=yc(y,39/360,40/360,.38,.42,.55,.62);
+    treeCol[j]=c[0];treeCol[j+1]=c[1];treeCol[j+2]=c[2];
   }
-  const TRUNK=700,MAIN_BRANCH=600,SUB_BRANCH=500,CANOPY=500;
-  let ki=0;
-  // Trunk
-  for(let i=0;i<TRUNK;i++){
-    const t=Math.random(),y=t*1.55,rad=.05+t*.035,phi=Math.random()*Math.PI*2;
-    const j=ki*3;treePos[j]=Math.cos(phi)*rad;treePos[j+1]=y;treePos[j+2]=Math.sin(phi)*rad;
-    ki++;
-  }
-  // 5 main branches
-  const NBR=5;
-  for(let b=0;b<NBR;b++){
-    const bt=.45+Math.random()*.35,baseAng=b/NBR*Math.PI*2+(Math.random()-.5)*.3;
-    const u=1-bt,bx=u*u*u*0+3*u*u*bt*.02+3*u*bt*bt*(-.01)+bt*bt*bt*0;
-    const by=u*u*u*0+3*u*u*bt*(-.5)+3*u*bt*bt*(-1.0)+bt*bt*bt*(-1.55);
-    const bz=u*u*u*0+3*u*u*bt*.02+3*u*bt*bt*(-.01)+bt*bt*bt*0;
-    const brLen=.5+Math.random()*.35,brAng=Math.PI*.35+Math.random()*.25;
-    const ex=bx+Math.cos(baseAng)*Math.cos(brAng)*brLen,ey=by+Math.sin(brAng)*brLen,ez=bz+Math.sin(baseAng)*Math.cos(brAng)*brLen;
-    for(let k=0;k<Math.floor(MAIN_BRANCH/NBR);k++){
-      const t=Math.random();
-      const p=alongLine(t,bx,by,bz,ex,ey,ez,.035,.008);
-      const jj=ki*3;treePos[jj]=p.x;treePos[jj+1]=p.y;treePos[jj+2]=p.z;ki++;
-    }
-    // 2-3 sub-branches
-    const NSUB=2+Math.floor(Math.random()*2);
-    for(let sb=0;sb<NSUB;sb++){
-      const st=.3+Math.random()*.45;
-      const sx=lerp(bx,ex,st),sy=lerp(by,ey,st),sz=lerp(bz,ez,st);
-      const sLen=.15+Math.random()*.25,sAngX=brAng+(Math.random()-.3)*Math.PI*.25,sAngY=baseAng+(Math.random()-.5)*Math.PI*.35;
-      const se=sx+Math.cos(sAngY)*Math.cos(sAngX)*sLen,se2=sy+Math.sin(sAngX)*sLen,sez=sz+Math.sin(sAngY)*Math.cos(sAngX)*sLen;
-      for(let k=0;k<Math.floor(SUB_BRANCH/(NBR*NSUB));k++){
-        const t=Math.random(),p=alongLine(t,sx,sy,sz,se,se2,sez,.012,.003);
-        const jj=ki*3;treePos[jj]=p.x;treePos[jj+1]=p.y;treePos[jj+2]=p.z;ki++;
-      }
-      // Canopy cluster
-      for(let k=0;k<Math.floor(CANOPY/(NBR*NSUB));k++){
-        const cr=.03+Math.random()*.2,phi=Math.random()*Math.PI*2,th=Math.acos(2*Math.random()-1);
-        const jj=ki*3;treePos[jj]=se+Math.cos(phi)*Math.sin(th)*cr*Math.cos(th)*.5;treePos[jj+1]=se2+Math.sin(th)*cr*.7;treePos[jj+2]=sez+Math.cos(phi)*Math.sin(th)*cr*Math.sin(th)*.5;ki++;
-      }
+  // Root tendrils: 8 arched wedges radiating outward ────────────
+  for(let r=0;r<8;r++){
+    const ang=r/8*P*2+(Rn()-.5)*.15,len=.5+Rn()*.35;
+    for(let k=0;k<100;k++){
+      const t=Rn(),rr=t*len,y2=t*.12+.01,thick=.06*(1-t);
+      const rad=rr,mul=lerp(.7,1,Rn());
+      const j=(800+r*100+k)*3;
+      treePos[j]=C(ang+mul*(Rn()-.5)*.3)*(rad+thick*(Rn()-.5));
+      treePos[j+1]=y2+(Rn()-.5)*.03;
+      treePos[j+2]=Sf(ang+mul*(Rn()-.5)*.3)*(rad+thick*(Rn()-.5));
+      const c=yc(y2,39/360,40/360,.36,.42,.52,.62);
+      treeCol[j]=c[0];treeCol[j+1]=c[1];treeCol[j+2]=c[2];
     }
   }
-  // Fill remaining with canopy
+  // Main volume: 10K particles filling the radial profile ───────
+  let ki=800+8*100;
   while(ki<N){
-    const cx=(Math.random()-.5)*1.2,cy=.8+Math.random()*1.2,cz=(Math.random()-.5)*1.2;
-    const cr=.05+Math.random()*.35;
-    const jj=ki*3;treePos[jj]=cx+(Math.random()-.5)*cr;treePos[jj+1]=cy+(Math.random()-.5)*cr*.5;treePos[jj+2]=cz+(Math.random()-.5)*cr;ki++;
-  }
-  // Colors: trunk=brown gold, branches=amber, canopy=green gold white
-  for(let i=0;i<N;i++){
-    const j=i*3,y=treePos[j+1],yr=Math.sqrt(treePos[j]**2+treePos[j+2]**2);
-    if(yr<.15){const c=hsl(.1+Math.random()*.04,.6+Math.random()*.3,.2+Math.random()*.3);treeCol[j]=c.r;treeCol[j+1]=c.g;treeCol[j+2]=c.b;}
-    else if(yr<.4){const c=hsl(.12+Math.random()*.06,.5+Math.random()*.35,.3+Math.random()*.25);treeCol[j]=c.r;treeCol[j+1]=c.g;treeCol[j+2]=c.b;}
-    else{const c=hsl(.15+Math.random()*.12,.4+Math.random()*.4,.4+Math.random()*.4);treeCol[j]=c.r;treeCol[j+1]=c.g;treeCol[j+2]=c.b;}
+    const y=Rn()*3.35,rMax=mr(y);
+    // Uniform fill within radius (sqrt for volume-correct distribution)
+    const rr=Sq(Rn())*rMax,ang=Rn()*P*2;
+    const j=ki*3;
+    treePos[j]=C(ang)*rr;treePos[j+1]=y;treePos[j+2]=Sf(ang)*rr;
+    const c=yc(y,39/360,43/360,.35,.38,.58,.85);
+    treeCol[j]=c[0];treeCol[j+1]=c[1];treeCol[j+2]=c[2];
+    ki++;
   }
 }
 // ── Init particles to idle ──────────────────────────────────────
@@ -185,14 +181,15 @@ for(let i=0;i<N;i++){
 // ── Geometry ────────────────────────────────────────────────────
 function mkGeo(p,c){const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(p,3));g.setAttribute('color',new T.BufferAttribute(c,3));return g}
 const pGeo=mkGeo(pos,col);
-const pMat=new T.PointsMaterial({size:.08,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
+const pMat=new T.PointsMaterial({size:.028,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
+const treeMat=new T.PointsMaterial({size:.055,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
 const pts=new T.Points(pGeo,pMat);
 const grp=new T.Group();grp.add(pts);scene.add(grp);
 
 // ── Ghost trails ────────────────────────────────────────────────
 const ghosts=[];
 for(let g=0;g<2;g++){
-  const m=new T.PointsMaterial({size:.06-.02*g,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.35-g*.15});
+  const m=new T.PointsMaterial({size:.014-.004*g,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:.35-g*.15});
   const p=new T.Points(pGeo,m);scene.add(p);
   ghosts.push(p);
 }
@@ -217,12 +214,12 @@ const shellMat=new T.MeshBasicMaterial({color:0xcc88ff,blending:T.AdditiveBlendi
 const glowShell=new T.Mesh(shellGeo,shellMat);glowShell.visible=false;scene.add(glowShell);
 
 // ── Debris shard system (angular fragments, separate from stars) ─
-const DEBRIS_N=350;
+const DEBRIS_N=500;
 const dPos=new Float32Array(DEBRIS_N*3),dVel=new Float32Array(DEBRIS_N*3),dCol=new Float32Array(DEBRIS_N*3);
 const dTgt=new Float32Array(DEBRIS_N*3),dTgtCol=new Float32Array(DEBRIS_N*3);
 for(let i=0;i<DEBRIS_N;i++){const j=i*3;dPos[j]=dPos[j+1]=dPos[j+2]=0;dVel[j]=dVel[j+1]=dVel[j+2]=0;dCol[j]=dCol[j+1]=dCol[j+2]=0;}
 const dGeo=mkGeo(dPos,dCol);
-const dMat=new T.PointsMaterial({size:.4,map:shardSprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:0});
+const dMat=new T.PointsMaterial({size:.06,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true,opacity:0});
 const debrisPts=new T.Points(dGeo,dMat);debrisPts.visible=false;grp.add(debrisPts);
 
 // ═══════════════════════════════════════════════════════════════════
@@ -319,22 +316,27 @@ function detectCircle(){
 // ═══════════════════════════════════════════════════════════════════
 function setState(newState){
   prevState=state;state=newState;stateTime=0;
-  if(newState===States.PULSING){pulseStart=performance.now();coreMat.opacity=0;}
-  if(newState===States.EXPLODING){explosionTime=performance.now();explosionMaxVel=0;triggerExplosion();}
+  if(newState===States.PULSING){pulseStart=performance.now();coreMat.opacity=0;pts.material=pMat;}
+  if(newState===States.EXPLODING){explosionTime=performance.now();explosionMaxVel=0;triggerExplosion();pts.material=pMat;}
   if(newState===States.FORMING_TREE){
     copyTargets(treePos,treeCol);
     debrisPts.visible=true;dMat.opacity=.85;
+    pts.material=treeMat;
   }
   if(newState===States.TREE){
     if(prevState!==States.FORMING_TREE)copyTargets(treePos,treeCol);
     debrisPts.visible=true;dMat.opacity=.6;
+    pts.material=treeMat;
   }
   if(newState===States.IDLE){
     copyTargets(idlePos,idleCol);debrisPts.visible=false;dMat.opacity=0;
-    glowShell.visible=false;
+    glowShell.visible=false;pts.material=pMat;
   }
   if(newState===States.SCATTERED){
-    circleBuf.length=0;dMat.opacity=.85;debrisPts.visible=true;
+    circleBuf.length=0;dMat.opacity=.85;debrisPts.visible=true;pts.material=pMat;
+  }
+  if(newState===States.GATHERING){
+    pts.material=pMat;
   }
 }
 
@@ -699,42 +701,53 @@ function tick(){
     dGeo.attributes.position.needsUpdate=true;dGeo.attributes.color.needsUpdate=true;
   }
 
-  if(state===States.FORMING_TREE||state===States.TREE){
-    const springK=state===States.FORMING_TREE?8:6;
-    const springD=state===States.FORMING_TREE?5:5;
+  if(state===States.FORMING_TREE){
+    // Spring to target positions
+    const springK=8,springD=5;
     for(let i=0;i<N;i++){
       const j=i*3;
       vel[j]+=((tgt[j]-pos[j])*springK-vel[j]*springD)*dt;
       vel[j+1]+=((tgt[j+1]-pos[j+1])*springK-vel[j+1]*springD)*dt;
       vel[j+2]+=((tgt[j+2]-pos[j+2])*springK-vel[j+2]*springD)*dt;
     }
-    // Falling leaf debris in TREE state
-    if(state===States.TREE){
-      for(let i=0;i<DEBRIS_N;i++){
-        const j=i*3;
-        dVel[j]+=((Rn()-.5)*.05-dVel[j]*.8)*dt;
-        dVel[j+1]-=.12*dt; // slow fall
-        dVel[j+2]+=((Rn()-.5)*.05-dVel[j+2]*.8)*dt;
-        // Reset at bottom
-        if(dPos[j+1]<-1.5){dPos[j]=(Rn()-.5)*1.;dPos[j+1]=.8+Rn()*1.;dPos[j+2]=(Rn()-.5)*1.;dVel[j+1]=0;}
-        dCol[j]=lerp(dCol[j],.95,2*dt);dCol[j+1]=lerp(dCol[j+1],.75,2*dt);dCol[j+2]=lerp(dCol[j+2],.35,2*dt);
+    // Debris dissipates
+    for(let i=0;i<DEBRIS_N;i++){
+      const j=i*3;
+      dVel[j]+=((Rn()-.5)*.08-dVel[j]*1.5)*dt;
+      dVel[j+1]+=((Rn()-.5)*.08-dVel[j+1]*1.5)*dt;
+      dVel[j+2]+=((Rn()-.5)*.04-dVel[j+2]*1.5)*dt;
+    }
+    pMat.opacity=lerp(pMat.opacity,.85,3*dt);
+  }
+
+  if(state===States.TREE){
+    // Gentle wobble: particles stay on their volume position, micro tremor
+    for(let i=0;i<N;i++){
+      const j=i*3;
+      const k=6,dmp=4;
+      vel[j]+=((treePos[j]-pos[j])*k-vel[j]*dmp+((Rn()-.5)*.015))*dt;
+      vel[j+1]+=((treePos[j+1]-pos[j+1])*k-vel[j+1]*dmp+((Rn()-.5)*.015))*dt;
+      vel[j+2]+=((treePos[j+2]-pos[j+2])*k-vel[j+2]*dmp+((Rn()-.5)*.008))*dt;
+      tgtCol[j]=lerp(tgtCol[j],treeCol[j],4*dt);
+      tgtCol[j+1]=lerp(tgtCol[j+1],treeCol[j+1],4*dt);
+      tgtCol[j+2]=lerp(tgtCol[j+2],treeCol[j+2],4*dt);
+    }
+    // Incense smoke rising from canopy
+    for(let i=0;i<DEBRIS_N;i++){
+      const j=i*3;
+      dVel[j]+=((Rn()-.5)*.05-dVel[j]*.4)*dt;
+      dVel[j+1]+=.07*dt;
+      dVel[j+2]+=((Rn()-.5)*.05-dVel[j+2]*.4)*dt;
+      if(dPos[j+1]>3.8||dPos[j+1]<-1){
+        const ang=Rn()*P*2,rad=Rn()*1.4;
+        dPos[j]=C(ang)*rad;dPos[j+1]=1.5+Rn()*1.8;dPos[j+2]=Sf(ang)*rad;
+        dVel[j]=(Rn()-.5)*.06;dVel[j+1]=.03+Rn()*.1;dVel[j+2]=(Rn()-.5)*.06;
       }
-    }else if(state===States.FORMING_TREE){
-      // Transition: debris dissipates
-      for(let i=0;i<DEBRIS_N;i++){
-        const j=i*3;
-        dVel[j]+=((Rn()-.5)*.08-dVel[j]*1.5)*dt;
-        dVel[j+1]+=((Rn()-.5)*.08-dVel[j+1]*1.5)*dt;
-        dVel[j+2]+=((Rn()-.5)*.04-dVel[j+2]*1.5)*dt;
-      }
+      dCol[j]=lerp(dCol[j],.98,2*dt);dCol[j+1]=lerp(dCol[j+1],.85,2*dt);dCol[j+2]=lerp(dCol[j+2],.5,2*dt);
     }
-    // Transition: particles fade back in from SCATTERED pink
-    if(state===States.FORMING_TREE){
-      pMat.opacity=lerp(pMat.opacity,.85,3*dt);
-    }
-    if(state===States.TREE){
-      pMat.opacity=lerp(pMat.opacity,.85,2*dt);
-    }
+    dGeo.attributes.position.needsUpdate=true;dGeo.attributes.color.needsUpdate=true;
+    pts.material.opacity=lerp(pts.material.opacity,.88,2*dt);
+    bloom.strength=lerp(bloom.strength,.5,2*dt);
   }
 
   // ── Apply velocity & update positions ─────────────────────────
@@ -831,6 +844,8 @@ addEventListener('resize',()=>{
   ren.setSize(innerWidth,innerHeight);comp.setSize(innerWidth,innerHeight);
   camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
 });
+// DEBUG: press 't' to force TREE state for visual testing
+addEventListener('keydown',e=>{if(e.key==='t'&&state!==States.TREE){copyTargets(treePos,treeCol);prevState=States.SCATTERED;state=States.TREE;stateTime=0;debrisPts.visible=true;dMat.opacity=.6;pts.material=treeMat;}});
 
 // ═══════════════════════════════════════════════════════════════════
 // START
