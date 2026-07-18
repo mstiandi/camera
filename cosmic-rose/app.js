@@ -127,35 +127,21 @@ const hPos=new Float32Array(NHALO*3),hCol=new Float32Array(NHALO*3);
   }
 }
 
-// Compute tree shape — BRANCHES + ROOTS + VOLUME ───────────────
+// Compute tree shape — WINDING ROOTS + BRANCH CANOPY ──────────
 {
-  const yc=(y,hue0,hue1,sat0,sat1,lit0,lit1,hShift)=>{
-    const t=M.min(1,y/2.7);
-    const h=lerp(hue0,hue1,t)+hShift;
+  const yc=(y,hue0,hue1,sat0,sat1,lit0,lit1)=>{
+    const t=M.min(1,y/2.7),h=lerp(hue0,hue1,t);
     const c=hsl(h,lerp(sat0,sat1,t),lerp(lit0,lit1,t));
     return[c.r,c.g,c.b];
-  };
-  const mr=y=>{
-    y=M.max(0,y);
-    if(y<.08)return lerp(.65,.42,y/.08);
-    if(y<.35)return lerp(.42,.16,(y-.08)/.27);
-    if(y<1.25)return .16+M.sin(y*2.1)*.02;
-    if(y<2.15)return lerp(.16,1.2,(y-1.25)/.9);
-    if(y<2.85)return 1.2-M.pow((y-2.15)/.7,2)*.3;
-    if(y<3.35)return lerp(1.2,.03,(y-2.85)/.5);
-    return .02;
   };
   // Sample a point with thickness around a line segment ──────
   const sp=(ax,ay,az,bx,by,bz,t,rad)=>{
     const x0=lerp(ax,bx,t),y0=lerp(ay,by,t),z0=lerp(az,bz,t);
     const dx=bx-ax,dy=by-ay,dz=bz-az,len=Sq(dx*dx+dy*dy+dz*dz)||.001;
-    // Normalize direction
     const nx=dx/len,ny=dy/len,nz=dz/len;
-    // Pick random perpendicular direction
     const ang=Rn()*P*2,ca=M.cos(ang),sa=M.sin(ang);
-    // Compute two perpendiculars
     const rx=M.abs(ny)>.99?1:0,ry=M.abs(ny)>.99?0:1,rz=0;
-    const p1x=ry*nz-rz*ny,p1y=rz*nx-rx*nz,p1z=rx*ny-ry*nx;
+    const p1x=ry*nz,p1y=rz*nx-rx*nz,p1z=rx*ny-ry*nx;
     const p1l=Sq(p1x*p1x+p1y*p1y+p1z*p1z)||.001;
     const ux=p1x/p1l,uy=p1y/p1l,uz=p1z/p1l;
     const vx=ny*uz-nz*uy,vy=nz*ux-nx*uz,vz=nx*uy-ny*ux;
@@ -165,92 +151,111 @@ const hPos=new Float32Array(NHALO*3),hCol=new Float32Array(NHALO*3);
   let ki=0;
   const setP=(i,x,y,z,col)=>{const j=i*3;treePos[j]=x;treePos[j+1]=y;treePos[j+2]=z;treeCol[j]=col[0];treeCol[j+1]=col[1];treeCol[j+2]=col[2];};
 
-  // ── ROOTS: 7 thick arches from base ─────────────────────────
-  const NROOT=7,rootP=250;
-  for(let r=0;r<NROOT;r++){
-    const ang=r/NROOT*P*2+(Rn()-.5)*.2;
-    const len=.5+Rn()*.45,drop=.25+Rn()*.22;
-    const bx=0,by=.04,bz=0;
-    const mx=C(ang)*len*.55,my=-drop*.35,mz=Sf(ang)*len*.55;
-    const ex=C(ang)*len,ey=-drop,ez=Sf(ang)*len;
-    for(let k=0;k<rootP;k++){
-      const t=Rn(),rad=.07*(1-t)*.9;
-      const quad=1-(1-t)*(1-t);
-      const x0=lerp(bx,mx,quad),y0=lerp(by,my,quad),z0=lerp(bz,mz,quad);
-      const x1=lerp(mx,ex,t),y1=lerp(my,ey,t),z1=lerp(mz,ez,t);
-      const pt=t<.5?{x:lerp(x0,mx,t*2),y:lerp(y0,my,t*2),z:lerp(z0,mz,t*2)}:{x:lerp(mx,x1,(t-.5)*2),y:lerp(my,y1,(t-.5)*2),z:lerp(mz,z1,(t-.5)*2)};
-      const rr=Sq(Rn())*rad,ang2=Rn()*P*2,ca=M.cos(ang2),sa=M.sin(ang2);
-      const c=yc(pt.y<0?0:pt.y,39/360,41/360,.36,.44,.48,.60,(Rn()-.5)*.006);
-      setP(ki,pt.x+rr*ca,pt.y+rr*sa*.4,pt.z+rr*ca,c);ki++;
+  // ── WINDING ROOTS: 8 long snaking arches ────────────────────
+  for(let r=0;r<8;r++){
+    const baseAng=r/8*P*2+(Rn()-.5)*.18;
+    const segs=4+M.floor(Rn()*3); // 4-6 segments per root
+    const nodes=[{x:0,y:.05,z:0}];
+    let cx=0,cy=.05,cz=0;
+    let ang=baseAng,len=.15+Rn()*.12,drop=.03+Rn()*.05;
+    for(let s=0;s<segs;s++){
+      ang+=(Rn()-.5)*.35; len+=.08+Rn()*.12; drop=M.min(drop+.05+Rn()*.06,.4);
+      cx+=C(ang)*len; cy=M.max(cy-drop,.08-drop); cz+=Sf(ang)*len;
+      nodes.push({x:cx,y:cy,z:cz});
+    }
+    // Sample along the polyline with thickness
+    for(let k=0;k<450;k++){
+      const t=Rn(),segIdx=M.min(M.floor(t*(nodes.length-1)),nodes.length-2);
+      const a=nodes[segIdx],b=nodes[segIdx+1];
+      const pt=sp(a.x,a.y,a.z,b.x,b.y,b.z,(t*(nodes.length-1)-segIdx),.06*(1-t)*.8);
+      const c=yc(M.max(.01,pt.y),38/360,41/360,.36,.46,.46,.62);
+      setP(ki,pt.x,pt.y,pt.z,c);ki++;
     }
   }
 
-  // ── TRUNK: filled cylinder volume ───────────────────────────
-  const TR=1400;
-  for(let i=0;i<TR;i++){
-    const y=Rn()*1.5+.04,rad=mr(y);
-    const rr=Sq(Rn())*rad*.85,ang=Rn()*P*2;
-    const c=yc(y,39/360,41/360,.38,.44,.50,.62,(Rn()-.5)*.006);
+  // ── TRUNK: filled cylinder, slight taper ────────────────────
+  const trunkTop=1.4;
+  for(let i=0;i<1200;i++){
+    const y=Rn()*trunkTop+.04;
+    const rr=Sq(Rn())*lerp(.16,.12,(y-.04)/trunkTop)*.85,ang=Rn()*P*2;
+    const c=yc(y,39/360,41/360,.38,.44,.50,.64);
     setP(ki,C(ang)*rr,y,Sf(ang)*rr,c);ki++;
   }
 
-  // ── MAIN BRANCHES: 9 paths from trunk to canopy edge ────────
-  const NBR=9;
+  // ── MAIN BRANCHES: 13 visible arcs from trunk to canopy ─────
+  const NBR=13,brP=350,subP=120,tipP=40;
   for(let b=0;b<NBR;b++){
-    const y0=.22+(b/(NBR-1))*.76;
-    const trRad=mr(y0)*.85;
-    const az=b/NBR*P*2+(Rn()-.5)*.35;
-    const bx=C(az)*trRad,by=y0,bz=Sf(az)*trRad;
-    const el=.08+Rn()*.28,len=.7+Rn()*.7;
-    const mx2=C(az)*C(el),my2=Sf(el),mz2=Sf(az)*C(el);
-    const ex=bx+mx2*len,ey=by+my2*len,ez=bz+mz2*len;
-    // Particles along branch
-    for(let k=0;k<280;k++){
-      const t=Rn(),rad=.035*(1-t)*.8;
-      const p=sp(bx,by,bz,ex,ey,ez,t,rad);
-      const c=yc(p.y,38/360,42/360,.36,.42,.52,.72,(Rn()-.5)*.008);
-      setP(ki,p.x,p.y,p.z,c);ki++;
+    const tt=.12+(b/(NBR-1))*.73;
+    const y0=lerp(.25,trunkTop*.92,tt);
+    const trRad=lerp(.14,.08,tt)*.8;
+    const baseAz=b/NBR*P*2+(Rn()-.5)*.45;
+    const bx=C(baseAz)*trRad,by=y0,bz=Sf(baseAz)*trRad;
+    // Curved branch: quadratic bezier with bowing
+    const el=.1+Rn()*.35,len=.55+Rn()*.65;
+    const mx=C(baseAz)*C(el),my=Sf(el),mz=Sf(baseAz)*C(el);
+    const ex=bx+mx*len,ey=by+my*len,ez=bz+mz*len;
+    // Control point bows outward
+    const bow=.15+Rn()*.3;
+    const cpX=lerp(bx,ex,.5)+C(baseAz)*bow,cpY=lerp(by,ey,.45)+.15+Rn()*.2,cpZ=lerp(bz,ez,.5)+Sf(baseAz)*bow;
+    // Fill branch
+    for(let k=0;k<brP;k++){
+      const t=Rn(),u=1-t;
+      const cx=u*u*bx+2*u*t*cpX+t*t*ex;
+      const cy=u*u*by+2*u*t*cpY+t*t*ey;
+      const cz=u*u*bz+2*u*t*cpZ+t*t*ez;
+      const r=lerp(.04,.018,t)*.75,rr=Sq(Rn())*r;
+      const ang=Rn()*P*2,ca=M.cos(ang),sa=M.sin(ang);
+      const c=yc(cy,38/360,42/360,.36,.42,.54,.76);
+      setP(ki,cx+rr*ca,cy+rr*sa*.4,cz+rr*ca,c);ki++;
     }
-    // Sub-branches: 2-3 per main branch
-    const nSub=2+M.floor(Rn()*2);
+    // Sub-branches
+    const nSub=2+M.floor(Rn()*3);
     for(let s=0;s<nSub;s++){
-      const bt=.35+Rn()*.4;
-      const sx=lerp(bx,ex,bt),sy=lerp(by,ey,bt),sz=lerp(bz,ez,bt);
-      const saz=Rn()*P*2,sel=.05+Rn()*.3,slen=.15+Rn()*.25;
+      const bt=.3+Rn()*.45,u=1-bt;
+      const sx=u*u*bx+2*u*bt*cpX+bt*bt*ex;
+      const sy=u*u*by+2*u*bt*cpY+bt*bt*ey;
+      const sz=u*u*bz+2*u*bt*cpZ+bt*bt*ez;
+      const saz=Rn()*P*2,sel=.05+Rn()*.35,slen=.12+Rn()*.28;
       const smx=C(saz)*C(sel),smy=Sf(sel),smz=Sf(saz)*C(sel);
-      const se=sx+smx*slen,se2=sy+smy*slen,sez=sz+smz*slen;
-      for(let k=0;k<100;k++){
-        const t2=Rn(),rad2=.018*(1-t2)*.7;
-        const p2=sp(sx,sy,sz,se,se2,sez,t2,rad2);
-        const c=yc(p2.y,39/360,43/360,.34,.40,.58,.82,(Rn()-.5)*.008);
-        setP(ki,p2.x,p2.y,p2.z,c);ki++;
+      const sex=sx+smx*slen,sey=sy+smy*slen,sez=sz+smz*slen;
+      const scpX=lerp(sx,sex,.5)+(Rn()-.5)*.1,scpY=lerp(sy,sey,.45)+(Rn()-.5)*.08,scpZ=lerp(sz,sez,.5)+(Rn()-.5)*.1;
+      for(let k=0;k<subP;k++){
+        const t2=Rn(),u2=1-t2;
+        const cx2=u2*u2*sx+2*u2*t2*scpX+t2*t2*sex;
+        const cy2=u2*u2*sy+2*u2*t2*scpY+t2*t2*sey;
+        const cz2=u2*u2*sz+2*u2*t2*scpZ+t2*t2*sez;
+        const r2=lerp(.025,.012,t2)*.65,rr2=Sq(Rn())*r2;
+        const ang2=Rn()*P*2,ca2=M.cos(ang2),sa2=M.sin(ang2);
+        const c2=yc(cy2,39/360,43/360,.34,.40,.60,.84);
+        setP(ki,cx2+rr2*ca2,cy2+rr2*sa2*.4,cz2+rr2*ca2,c2);ki++;
       }
-      // Small canopy cluster at each sub-branch tip
-      for(let k=0;k<30;k++){
-        const cr=.06,phi=M.acos(2*Rn()-1),th=Rn()*P*2,rr=Sq(Rn())*cr;
-        const c=yc(se2,40/360,44/360,.30,.38,.64,.88,(Rn()-.5)*.005);
-        setP(ki,se+rr*Sf(phi)*C(th),se2+rr*Sf(phi)*Sf(th)*.6,sez+rr*C(phi),c);ki++;
+      // Tip foliage cluster
+      for(let k=0;k<tipP;k++){
+        const cr=.07,phi=M.acos(2*Rn()-1),th=Rn()*P*2,rd=Sq(Rn())*cr;
+        const c3=yc(sey,40/360,44/360,.28,.36,.66,.88);
+        setP(ki,sex+rd*Sf(phi)*C(th),sey+rd*Sf(phi)*Sf(th)*.7,sez+rd*C(phi),c3);ki++;
       }
     }
   }
 
-  // ── VOLUME FILL: remaining particles for crown bulk ────────
+  // ── CANOPY VOLUME: light fill between branches, mostly near tips
   while(ki<N){
-    const y=Rn()*3.35,rMax=mr(y);
-    const isSfc=ki%3===0;
-    const rr=isSfc?rMax*(.85+Rn()*.15):Sq(Rn())*rMax;
-    const ang=Rn()*P*2;
-    const c=yc(y,39/360,43/360,.35,.38,.58,.85,(Rn()-.5)*.01);
+    const y=.9+Rn()*2.4; // only in canopy zone
+    const yFrac=(y-.9)/2.4;
+    // Max radius shrinks near top, grows in middle
+    const rMax=.1+1.1*M.sin(yFrac*P*.85)+.05*M.sin(yFrac*P*3.7);
+    const rr=Sq(Rn())*rMax,ang=Rn()*P*2;
+    const c=yc(y,39/360,43/360,.34,.38,.58,.84);
     setP(ki,C(ang)*rr,y,Sf(ang)*rr,c);ki++;
   }
 
   // ── SURFACE HALO ────────────────────────────────────────────
   for(let i=0;i<NHALO;i++){
-    const y=Rn()*3.35,rMax=mr(y);
-    const rr=rMax*(.92+Rn()*.10),ang=Rn()*P*2;
+    const y=.9+Rn()*2.4,yf=(y-.9)/2.4;
+    const rM=.1+1.1*M.sin(yf*P*.85),rr=rM*(.92+Rn()*.10),ang=Rn()*P*2;
     const j=i*3;
     hPos[j]=C(ang)*rr;hPos[j+1]=y;hPos[j+2]=Sf(ang)*rr;
-    const c=yc(y,40/360,44/360,.28,.32,.62,.92,(Rn()-.5)*.006);
+    const c=yc(y,40/360,44/360,.26,.32,.64,.90);
     hCol[j]=c[0];hCol[j+1]=c[1];hCol[j+2]=c[2];
   }
 }
