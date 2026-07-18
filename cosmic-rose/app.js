@@ -803,20 +803,19 @@ function tick(){
   // ═══════════════════════════════════════════════════════════════
   if(state===States.SPHERE){
     // Heavy EMA: ~1.5s to respond, kills frame-level jitter completely
-    // Integrator: openness→speed, noise cancels over time
-    const spd=(openness-.22)*18;
-    camera.position.z=M.max(.6,M.min(camera.position.z-spd*dt,7.5));
+    // Binary keyframe: open→ring, closed→outside, lerp transition
+    const tgtZ=openness>.35?.6:7.5;
+    const tgtOp=openness>.35?.4:.88;
+    const tgtCoreOp=openness>.35?.92:.7;
+    camera.position.z=lerp(camera.position.z,tgtZ,5*dt);
+    pMat.opacity=lerp(pMat.opacity,tgtOp,4*dt);
+    cMat.opacity=lerp(cMat.opacity,tgtCoreOp,4*dt);
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
-    // Outer shell fades as camera penetrates
-    const inShell=M.max(0,1-camera.position.z/3.5);
-    pMat.opacity=lerp(pMat.opacity,.88-inShell*.6,3*dt);
-    cMat.opacity=lerp(cMat.opacity,.7+inShell*.3,5*dt);
     if(handPresent){
       grp.rotation.y+=pointDir*2.5*dt;
       corePts.rotation.y+=pointDir*1.2*dt;
     }else{
-      // No auto-rotation, slowly decelerate
       grp.rotation.y+=(-grp.rotation.y*.5)*dt;
       corePts.rotation.y+=(-corePts.rotation.y*.5)*dt;
       camera.position.z=lerp(camera.position.z,7.5,3*dt);
