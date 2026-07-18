@@ -24,7 +24,7 @@ const HINTS=[
   '',
   '用手指在空中画一个圆',
   '光球正在凝聚…',
-  '🖐 张握缩放',
+  '🖐 张握穿透 · ☜☞ 旋转',
   ''
 ];
 let state=States.IDLE,prevState=-1,stateTime=0,pulseStart=0;
@@ -43,7 +43,7 @@ document.body.prepend(ren.domElement);
 
 const scene=new T.Scene();scene.background=new T.Color(0x010108);
 const camera=new T.PerspectiveCamera(50,innerWidth/innerHeight,.5,50);
-camera.position.set(0,0,6.5);camera.lookAt(0,0,0);
+camera.position.set(0,0,7.5);camera.lookAt(0,0,0);
 camera.near=.2;camera.updateProjectionMatrix();
 
 const comp=new EffectComposer(ren);
@@ -131,19 +131,16 @@ const cTreePos=new Float32Array(NCORE*3),cTreeCol=new Float32Array(NCORE*3);
 
 // Compute sphere shape: Fibonacci even distribution ───────────
 {
-  const R=1.2;
-  const gr=(1+M.sqrt(5))/2; // golden ratio
+  const R=1.6; // outer shell (was 1.2 → bigger)
+  const gr=(1+M.sqrt(5))/2;
   for(let i=0;i<N;i++){
     const j=i*3;
-    // Fibonacci sphere: uniform surface coverage
     const phi=M.acos(1-2*(i+.5)/N);
     const th=P*2*((i*gr)%1);
-    // Slight radial noise for texture (not too deep, just enough for fluff)
     const rr=R*(.94+Rn()*.06);
     treePos[j]=rr*M.sin(phi)*M.cos(th);
     treePos[j+1]=rr*M.sin(phi)*M.sin(th);
     treePos[j+2]=rr*M.cos(phi);
-    // Latitude gradient: equator warm → poles cool
     const lat=M.abs(phi/P-.5)*2;
     const hue=lerp(lerp(.15,.70,lat),.58,lat*lat);
     const sat=lerp(.6,.35,lat);
@@ -151,8 +148,8 @@ const cTreePos=new Float32Array(NCORE*3),cTreeCol=new Float32Array(NCORE*3);
     const c=hsl(hue,sat,lit);
     treeCol[j]=c.r;treeCol[j+1]=c.g;treeCol[j+2]=c.b;
   }
-  // Hot core: Fibonacci too
-  const cR=.35;
+  // Hot core: smaller, brighter — big gap from outer shell
+  const cR=.22;
   for(let i=0;i<NCORE;i++){
     const j=i*3;
     const phi=M.acos(1-2*(i+.5)/NCORE);
@@ -161,7 +158,7 @@ const cTreePos=new Float32Array(NCORE*3),cTreeCol=new Float32Array(NCORE*3);
     cTreePos[j]=rr*M.sin(phi)*M.cos(th);
     cTreePos[j+1]=rr*M.sin(phi)*M.sin(th);
     cTreePos[j+2]=rr*M.cos(phi);
-    const c=hsl(.58+(Rn()-.5)*.03,.2+Rn()*.15,.72+Rn()*.2);
+    const c=hsl(.58+(Rn()-.5)*.03,.15+Rn()*.1,.78+Rn()*.18);
     cTreeCol[j]=c.r;cTreeCol[j+1]=c.g;cTreeCol[j+2]=c.b;
   }
 }
@@ -808,20 +805,21 @@ function tick(){
     // Heavy EMA: ~1.5s to respond, kills frame-level jitter completely
     // Integrator: openness→speed, noise cancels over time
     const spd=(openness-.22)*18;
-    camera.position.z=M.max(.4,M.min(camera.position.z-spd*dt,6.5));
+    camera.position.z=M.max(.6,M.min(camera.position.z-spd*dt,7.5));
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
-    // Outer shell fades as camera penetrates (avoids white wall)
-    const inShell=M.max(0,1-camera.position.z/2.5);
-    pMat.opacity=lerp(pMat.opacity,.88-inShell*.55,3*dt);
+    // Outer shell fades as camera penetrates
+    const inShell=M.max(0,1-camera.position.z/3.5);
+    pMat.opacity=lerp(pMat.opacity,.88-inShell*.6,3*dt);
     cMat.opacity=lerp(cMat.opacity,.7+inShell*.3,5*dt);
     if(handPresent){
-      grp.rotation.y+=pointDir*1.5*dt;
-      corePts.rotation.y+=pointDir*.8*dt;
+      grp.rotation.y+=pointDir*2.5*dt;
+      corePts.rotation.y+=pointDir*1.2*dt;
     }else{
-      grp.rotation.y+=dt*.2;
-      corePts.rotation.y+=dt*.1;
-      camera.position.z=lerp(camera.position.z,6.5,3*dt);
+      // No auto-rotation, slowly decelerate
+      grp.rotation.y+=(-grp.rotation.y*.5)*dt;
+      corePts.rotation.y+=(-corePts.rotation.y*.5)*dt;
+      camera.position.z=lerp(camera.position.z,7.5,3*dt);
     }
     const sName='🔮 光球';
     if(handPresent){
