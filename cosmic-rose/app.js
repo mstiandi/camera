@@ -809,8 +809,9 @@ function tick(){
   if(state===States.SPHERE){
     // Camera pierces through outer shell toward inner core
     // hand open → rush forward through outer sphere into ring zone
-    const tgtZ=6.5-M.pow(openness,1.2)*8.5; // any open → hard push through shell
-    camera.position.z=lerp(camera.position.z,tgtZ,12*dt);
+    // sqrt curve: small openness → deep penetration through outer shell
+    const tgtZ=6.5-M.sqrt(openness)*9; // 0.3→1.6(near shell) 0.4→0.8(inside) 0.5→0.1(core)
+    camera.position.z=lerp(camera.position.z,tgtZ,15*dt);
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
     const close=M.max(0,1-(camera.position.z/2.5));
