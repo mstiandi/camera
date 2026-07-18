@@ -15,7 +15,7 @@ const evB=(pts,t)=>{if(pts.length===4){const u=1-t;return[u*u*u*pts[0][0]+3*u*u*
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const N=14000,RING_POOL=4;
+const N=12000,NCORE=2000,RING_POOL=4;
 const States={IDLE:0,GATHERING:1,PULSING:2,EXPLODING:3,SCATTERED:4,FORMING_SPHERE:5,SPHERE:6};
 const HINTS=[
   '伸出食指召唤星辰',
@@ -109,6 +109,10 @@ const pos=new Float32Array(N*3),vel=new Float32Array(N*3),col=new Float32Array(N
 const tgt=new Float32Array(N*3),tgtCol=new Float32Array(N*3);
 const idlePos=new Float32Array(N*3),idleCol=new Float32Array(N*3);
 const treePos=new Float32Array(N*3),treeCol=new Float32Array(N*3);
+// Core: hot inner sphere
+const cPos=new Float32Array(NCORE*3),cVel=new Float32Array(NCORE*3),cCol=new Float32Array(NCORE*3);
+const cTgt=new Float32Array(NCORE*3),cTgtCol=new Float32Array(NCORE*3);
+const cTreePos=new Float32Array(NCORE*3),cTreeCol=new Float32Array(NCORE*3);
 
 // ── Compute idle: scattered across view volume ──────────────────
 {
@@ -124,21 +128,40 @@ const treePos=new Float32Array(N*3),treeCol=new Float32Array(N*3);
   }
 }
 
-// Compute sphere shape: particles on sphere surface ──────────
+// Compute sphere shape: gradient nebula + hot core ────────────
 {
+  // Outer sphere: warm rose → lavender → ice blue gradient by latitude
   const R=1.2;
   for(let i=0;i<N;i++){
     const j=i*3;
-    const phi=M.acos(2*Rn()-1);
+    const phi=M.acos(2*Rn()-1); // 0=north pole, PI=south pole
     const th=Rn()*P*2;
-    // Surface with slight thickness
-    const rr=R*(.88+Rn()*.12);
+    // 30% surface, 40% mid, 30% deep — variable radii
+    const band=Rn();
+    const depth=band<.3?.88+Rn()*.04:band<.7?.92+Rn()*.06:.96+Rn()*.04;
+    const rr=R*depth;
     treePos[j]=rr*M.sin(phi)*M.cos(th);
     treePos[j+1]=rr*M.sin(phi)*M.sin(th);
     treePos[j+2]=rr*M.cos(phi);
-    const hue=[.55,.65,.72,.08,.15,.22][M.floor(Rn()*6)]+(Rn()-.5)*.04;
-    const c=hsl(hue,.5+Rn()*.4,.5+Rn()*.4);
+    // Latitude-based gradient: equator=warm rose, mid=lavender, poles=ice blue
+    const lat=M.abs(phi/P-.5)*2; // 0=equator, 1=poles
+    const hue=lerp(lerp(.15,.70,lat),.58,lat*lat); // rose→purple→blue
+    const sat=lerp(.65,.35,lat);
+    const lit=lerp(.55,.80,lat);
+    const c=hsl(hue,sat,lit);
     treeCol[j]=c.r;treeCol[j+1]=c.g;treeCol[j+2]=c.b;
+  }
+  // Hot core: small dense blue-white sphere inside
+  const cR=.35;
+  for(let i=0;i<NCORE;i++){
+    const j=i*3;
+    const phi=M.acos(2*Rn()-1),th=Rn()*P*2;
+    const rr=cR*(.85+Rn()*.15);
+    cTreePos[j]=rr*M.sin(phi)*M.cos(th);
+    cTreePos[j+1]=rr*M.sin(phi)*M.sin(th);
+    cTreePos[j+2]=rr*M.cos(phi);
+    const c=hsl(.58+(Rn()-.5)*.04,.25+Rn()*.2,.7+Rn()*.25);
+    cTreeCol[j]=c.r;cTreeCol[j+1]=c.g;cTreeCol[j+2]=c.b;
   }
 }
 for(let i=0;i<N;i++){
@@ -151,13 +174,28 @@ for(let i=0;i<N;i++){
   col[j+2]=idleCol[j+2];tgtCol[j+2]=idleCol[j+2];
   tgt[j]=idlePos[j];tgt[j+1]=idlePos[j+1];tgt[j+2]=idlePos[j+2];
 }
+// Init core particles scattered (they'll snap to core on SPHERE)
+for(let i=0;i<NCORE;i++){
+  const j=i*3;
+  const ang=Rn()*P*2,phi=M.acos(2*Rn()-1),rr=1.5+Rn()*3;
+  cPos[j]=rr*M.sin(phi)*M.cos(ang);cVel[j]=(Rn()-.5)*.02;
+  cPos[j+1]=rr*M.sin(phi)*M.sin(ang);cVel[j+1]=(Rn()-.5)*.02;
+  cPos[j+2]=rr*M.cos(phi);cVel[j+2]=(Rn()-.5)*.02;
+  cCol[j]=.8;cCol[j+1]=.85;cCol[j+2]=1;
+  cTgtCol[j]=.8;cTgtCol[j+1]=.85;cTgtCol[j+2]=1;
+  cTgt[j]=cPos[j];cTgt[j+1]=cPos[j+1];cTgt[j+2]=cPos[j+2];
+}
 
 // ── Geometry ────────────────────────────────────────────────────
 function mkGeo(p,c){const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(p,3));g.setAttribute('color',new T.BufferAttribute(c,3));return g}
 const pGeo=mkGeo(pos,col);
 const pMat=new T.PointsMaterial({size:.06,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
 const pts=new T.Points(pGeo,pMat);
-const grp=new T.Group();grp.add(pts);scene.add(grp);
+// Core: hot inner sphere, smaller but brighter
+const cGeo=mkGeo(cPos,cCol);
+const cMat=new T.PointsMaterial({size:.045,map:sprite,vertexColors:true,blending:T.AdditiveBlending,depthWrite:false,transparent:true});
+const corePts=new T.Points(cGeo,cMat);corePts.visible=false;
+const grp=new T.Group();grp.add(pts);grp.add(corePts);scene.add(grp);
 
 // ── Ghost trails ────────────────────────────────────────────────
 const ghosts=[];
@@ -293,17 +331,21 @@ function setState(newState){
   if(newState===States.EXPLODING){explosionTime=performance.now();explosionMaxVel=0;triggerExplosion();pts.material=pMat;}
   if(newState===States.FORMING_SPHERE){
     copyTargets(treePos,treeCol);
+    for(let i=0;i<NCORE*3;i++){cTgt[i]=cTreePos[i];cTgtCol[i]=cTreeCol[i];}
     debrisPts.visible=true;dMat.opacity=.65;
-    pts.material=pMat;
+    corePts.visible=true;
   }
   if(newState===States.SPHERE){
-    if(prevState!==States.FORMING_SPHERE)copyTargets(treePos,treeCol);
+    if(prevState!==States.FORMING_SPHERE){
+      copyTargets(treePos,treeCol);
+      for(let i=0;i<NCORE*3;i++){cTgt[i]=cTreePos[i];cTgtCol[i]=cTreeCol[i];}
+    }
     debrisPts.visible=true;dMat.opacity=.5;
-    pts.material=pMat;
+    corePts.visible=true;
   }
   if(newState===States.IDLE){
     copyTargets(idlePos,idleCol);debrisPts.visible=false;dMat.opacity=0;
-    glowShell.visible=false;pts.material=pMat;
+    glowShell.visible=false;corePts.visible=false;
   }
   if(newState===States.SCATTERED){
     circleBuf.length=0;dMat.opacity=.85;debrisPts.visible=true;pts.material=pMat;
@@ -674,13 +716,18 @@ function tick(){
   }
 
   if(state===States.FORMING_SPHERE){
-    // Spring to sphere positions
-    const springK=8,springD=5;
+    const sk=8,sd=5;
     for(let i=0;i<N;i++){
       const j=i*3;
-      vel[j]+=((tgt[j]-pos[j])*springK-vel[j]*springD)*dt;
-      vel[j+1]+=((tgt[j+1]-pos[j+1])*springK-vel[j+1]*springD)*dt;
-      vel[j+2]+=((tgt[j+2]-pos[j+2])*springK-vel[j+2]*springD)*dt;
+      vel[j]+=((tgt[j]-pos[j])*sk-vel[j]*sd)*dt;
+      vel[j+1]+=((tgt[j+1]-pos[j+1])*sk-vel[j+1]*sd)*dt;
+      vel[j+2]+=((tgt[j+2]-pos[j+2])*sk-vel[j+2]*sd)*dt;
+    }
+    for(let i=0;i<NCORE;i++){
+      const j=i*3;
+      cVel[j]+=((cTgt[j]-cPos[j])*sk-cVel[j]*sd)*dt;
+      cVel[j+1]+=((cTgt[j+1]-cPos[j+1])*sk-cVel[j+1]*sd)*dt;
+      cVel[j+2]+=((cTgt[j+2]-cPos[j+2])*sk-cVel[j+2]*sd)*dt;
     }
     for(let i=0;i<DEBRIS_N;i++){
       const j=i*3;
@@ -689,21 +736,31 @@ function tick(){
       dVel[j+2]+=((Rn()-.5)*.04-dVel[j+2]*1.5)*dt;
     }
     pMat.opacity=lerp(pMat.opacity,.85,3*dt);
+    cMat.opacity=lerp(cMat.opacity,.9,3*dt);
   }
 
   if(state===States.SPHERE){
-    // Hold position, drift toward colors
+    const sk=5,sd=3.5;
     for(let i=0;i<N;i++){
       const j=i*3;
-      const k=5,dmp=3.5;
-      vel[j]+=((treePos[j]-pos[j])*k-vel[j]*dmp+((Rn()-.5)*.01))*dt;
-      vel[j+1]+=((treePos[j+1]-pos[j+1])*k-vel[j+1]*dmp+((Rn()-.5)*.01))*dt;
-      vel[j+2]+=((treePos[j+2]-pos[j+2])*k-vel[j+2]*dmp+((Rn()-.5)*.006))*dt;
+      vel[j]+=((treePos[j]-pos[j])*sk-vel[j]*sd+((Rn()-.5)*.01))*dt;
+      vel[j+1]+=((treePos[j+1]-pos[j+1])*sk-vel[j+1]*sd+((Rn()-.5)*.01))*dt;
+      vel[j+2]+=((treePos[j+2]-pos[j+2])*sk-vel[j+2]*sd+((Rn()-.5)*.006))*dt;
       tgtCol[j]=lerp(tgtCol[j],treeCol[j],3*dt);
       tgtCol[j+1]=lerp(tgtCol[j+1],treeCol[j+1],3*dt);
       tgtCol[j+2]=lerp(tgtCol[j+2],treeCol[j+2],3*dt);
     }
-    // Debris orbit around sphere
+    // Core: pulse gently
+    for(let i=0;i<NCORE;i++){
+      const j=i*3;
+      cVel[j]+=((cTreePos[j]-cPos[j])*sk-cVel[j]*sd+((Rn()-.5)*.008))*dt;
+      cVel[j+1]+=((cTreePos[j+1]-cPos[j+1])*sk-cVel[j+1]*sd+((Rn()-.5)*.008))*dt;
+      cVel[j+2]+=((cTreePos[j+2]-cPos[j+2])*sk-cVel[j+2]*sd+((Rn()-.5)*.005))*dt;
+      cTgtCol[j]=lerp(cTgtCol[j],cTreeCol[j],3*dt);
+      cTgtCol[j+1]=lerp(cTgtCol[j+1],cTreeCol[j+1],3*dt);
+      cTgtCol[j+2]=lerp(cTgtCol[j+2],cTreeCol[j+2],3*dt);
+    }
+    // Debris orbit
     for(let i=0;i<DEBRIS_N;i++){
       const j=i*3;
       const dx=dPos[j],dy=dPos[j+1],dz=dPos[j+2];
@@ -711,13 +768,13 @@ function tick(){
       dVel[j]+=((-dx*.8-dy*.5)*.3-dVel[j]*.7)*dt;
       dVel[j+1]+=((-dy*.8+dx*.3)*.3-dVel[j+1]*.7)*dt;
       dVel[j+2]+=((-dz*.8)*.3-dVel[j+2]*.7)*dt;
-      // Keep at ~1.5 radius
       if(d>2.5||d<1.0){dPos[j]=1.5*dx/d;dPos[j+1]=1.5*dy/d;dPos[j+2]=1.5*dz/d;}
       dCol[j]=lerp(dCol[j],.95,2*dt);dCol[j+1]=lerp(dCol[j+1],.8,2*dt);dCol[j+2]=lerp(dCol[j+2],.45,2*dt);
     }
     dGeo.attributes.position.needsUpdate=true;dGeo.attributes.color.needsUpdate=true;
     pts.material.opacity=lerp(pts.material.opacity,.88,2*dt);
-    bloom.strength=lerp(bloom.strength,.5,2*dt);
+    cMat.opacity=lerp(cMat.opacity,.92,2*dt);
+    bloom.strength=lerp(bloom.strength,.55,2*dt);
   }
 
   // ── Apply velocity & update positions ─────────────────────────
@@ -731,6 +788,9 @@ function tick(){
   }
   pGeo.attributes.position.needsUpdate=true;
   pGeo.attributes.color.needsUpdate=true;
+  // Core update
+  for(let i=0;i<NCORE;i++){const j=i*3;cPos[j]+=cVel[j]*dt;cPos[j+1]+=cVel[j+1]*dt;cPos[j+2]+=cVel[j+2]*dt;cCol[j]=lerp(cCol[j],cTgtCol[j],3*dt);cCol[j+1]=lerp(cCol[j+1],cTgtCol[j+1],3*dt);cCol[j+2]=lerp(cCol[j+2],cTgtCol[j+2],3*dt);}
+  cGeo.attributes.position.needsUpdate=true;cGeo.attributes.color.needsUpdate=true;
   // Debris update
   for(let i=0;i<DEBRIS_N;i++){const j=i*3;dPos[j]+=dVel[j]*dt;dPos[j+1]+=dVel[j+1]*dt;dPos[j+2]+=dVel[j+2]*dt;}
   dGeo.attributes.position.needsUpdate=true;dGeo.attributes.color.needsUpdate=true;
@@ -814,7 +874,7 @@ addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
 });
 // DEBUG: press 't' to force TREE state for visual testing
-addEventListener('keydown',e=>{if(e.key==='s'&&state!==States.SPHERE){copyTargets(treePos,treeCol);prevState=States.SCATTERED;state=States.SPHERE;stateTime=0;debrisPts.visible=true;dMat.opacity=.5;pts.material=pMat;}});
+addEventListener('keydown',e=>{if(e.key==='s'&&state!==States.SPHERE){copyTargets(treePos,treeCol);for(let i=0;i<NCORE*3;i++){cTgt[i]=cTreePos[i];cTgtCol[i]=cTreeCol[i];}prevState=States.SCATTERED;state=States.SPHERE;stateTime=0;debrisPts.visible=true;dMat.opacity=.5;corePts.visible=true;}});
 
 // ═══════════════════════════════════════════════════════════════════
 // START
