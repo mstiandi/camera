@@ -15,7 +15,7 @@ const evB=(pts,t)=>{if(pts.length===4){const u=1-t;return[u*u*u*pts[0][0]+3*u*u*
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const N=12000,NHALO=2000,RING_POOL=4;
+const N=14000,NHALO=0,RING_POOL=4;
 const flickerP=new Float32Array(N+NHALO);
 for(let i=0;i<N+NHALO;i++)flickerP[i]=Rn()*P*2;
 const States={IDLE:0,GATHERING:1,PULSING:2,EXPLODING:3,SCATTERED:4,FORMING_TREE:5,TREE:6};
@@ -127,179 +127,163 @@ const hPos=new Float32Array(NHALO*3),hCol=new Float32Array(NHALO*3);
   }
 }
 
-// Compute tree shape — PURE STRUCTURE: roots + trunk + branches + foliage
+// Compute tree shape — PROPER 3D CYLINDRICAL TUBES ─────────────
 {
-  const yc=(y,hue0,hue1,sat0,sat1,lit0,lit1)=>{
-    const t=M.min(1,y/2.7),h=lerp(hue0,hue1,t);
-    const c=hsl(h,lerp(sat0,sat1,t),lerp(lit0,lit1,t));
+  const col=(y,h0,h1,s0,s1,l0,l1)=>{
+    const t=M.min(1,y/2.7),h=lerp(h0,h1,t);
+    const c=hsl(h,lerp(s0,s1,t),lerp(l0,l1,t));
     return[c.r,c.g,c.b];
   };
-  const col=(y,h0,h1,s0,s1,l0,l1)=>yc(y,h0,h1,s0,s1,l0,l1);
 
-  // Cubic bezier 3D ──────────────────────────────────────────
-  const b3=(t,p0,p1,p2,p3)=>{const u=1-t;return[
-    u*u*u*p0[0]+3*u*u*t*p1[0]+3*u*t*t*p2[0]+t*t*t*p3[0],
-    u*u*u*p0[1]+3*u*u*t*p1[1]+3*u*t*t*p2[1]+t*t*t*p3[1],
-    u*u*u*p0[2]+3*u*u*t*p1[2]+3*u*t*t*p2[2]+t*t*t*p3[2]];};
-
-  // Quadratic bezier 3D ──────────────────────────────────────
+  // b2(t) = quadratic bezier, b2t(t) = its tangent ──────────
   const b2=(t,p0,p1,p2)=>{const u=1-t;return[
     u*u*p0[0]+2*u*t*p1[0]+t*t*p2[0],
     u*u*p0[1]+2*u*t*p1[1]+t*t*p2[1],
     u*u*p0[2]+2*u*t*p1[2]+t*t*p2[2]];};
+  const b2t=(t,p0,p1,p2)=>{const u=1-t;return[
+    2*u*(p1[0]-p0[0])+2*t*(p2[0]-p1[0]),
+    2*u*(p1[1]-p0[1])+2*t*(p2[1]-p1[1]),
+    2*u*(p1[2]-p0[2])+2*t*(p2[2]-p1[2])];};
+  // b3(t) = cubic bezier, b3t(t) = its tangent ──────────────
+  const b3=(t,p0,p1,p2,p3)=>{const u=1-t;return[
+    u*u*u*p0[0]+3*u*u*t*p1[0]+3*u*t*t*p2[0]+t*t*t*p3[0],
+    u*u*u*p0[1]+3*u*u*t*p1[1]+3*u*t*t*p2[1]+t*t*t*p3[1],
+    u*u*u*p0[2]+3*u*u*t*p1[2]+3*u*t*t*p2[2]+t*t*t*p3[2]];};
+  const b3t=(t,p0,p1,p2,p3)=>{const u=1-t;return[
+    3*u*u*(p1[0]-p0[0])+6*u*t*(p2[0]-p1[0])+3*t*t*(p3[0]-p2[0]),
+    3*u*u*(p1[1]-p0[1])+6*u*t*(p2[1]-p1[1])+3*t*t*(p3[1]-p2[1]),
+    3*u*u*(p1[2]-p0[2])+6*u*t*(p2[2]-p1[2])+3*t*t*(p3[2]-p2[2])];};
 
-  // Fill a tube segment at curve point with thickness ───────
-  const tubePoint=(cp,rad)=>{
+  // Fill circular cross-section perpendicular to a given tangent
+  const fillDisc=(cp,T,rad)=>{
+    const l=Sq(T[0]*T[0]+T[1]*T[1]+T[2]*T[2])||1e-6, tx=T[0]/l,ty=T[1]/l,tz=T[2]/l;
+    // Perpendicular N = T × world-up (or world-right if T parallel to up)
+    const ux=M.abs(ty)>.99?0:-tz,uy=M.abs(ty)>.99?tz:0,uz=M.abs(ty)>.99?-tx:tx;
+    const ul=Sq(ux*ux+uy*uy+uz*uz)||1e-6;
+    const nx=ux/ul,ny=uy/ul,nz=uz/ul;
+    // B = T × N
+    const bx=ty*nz-tz*ny,by=tz*nx-tx*nz,bz=tx*ny-ty*nx;
     const ang=Rn()*P*2,ca=M.cos(ang),sa=M.sin(ang);
     const rr=Sq(Rn())*rad;
-    return{x:cp[0]+rr*ca,y:cp[1]+rr*sa*.35,z:cp[2]+rr*ca};
+    return{x:cp[0]+rr*(ca*nx+sa*bx),y:cp[1]+rr*(ca*ny+sa*by),z:cp[2]+rr*(ca*nz+sa*bz)};
   };
 
   let ki=0;
-  const setP=(x,y,z,cr,cg,cb)=>{const j=ki*3;treePos[j]=x;treePos[j+1]=y;treePos[j+2]=z;treeCol[j]=cr;treeCol[j+1]=cg;treeCol[j+2]=cb;};
+  const PUSH=(x,y,z,cr,cg,cb)=>{const j=ki*3;treePos[j]=x;treePos[j+1]=y;treePos[j+2]=z;treeCol[j]=cr;treeCol[j+1]=cg;treeCol[j+2]=cb;ki++;};
+  const PUSHC=(cp,clr)=>{PUSH(cp[0],cp[1],cp[2],clr[0],clr[1],clr[2]);ki--;PUSH(cp[0],cp[1],cp[2],clr[0],clr[1],clr[2]);};
 
-  // ══════ SMOOTH ROOTS: 10 cubic beziers ════════════════════
-  const rootDefs=[
-    {az:0,   len:.9, drop:.5,  cpOut:.25, cpUp:.08},
-    {az:.4,  len:1.0,drop:.55, cpOut:.3,  cpUp:.06},
-    {az:.8,  len:.85,drop:.48, cpOut:.22, cpUp:.1},
-    {az:1.2, len:1.1,drop:.6,  cpOut:.35, cpUp:.05},
-    {az:1.6, len:.95,drop:.52, cpOut:.28, cpUp:.07},
-    {az:2.0, len:1.05,drop:.58,cpOut:.32, cpUp:.04},
-    {az:2.4, len:.8, drop:.45, cpOut:.2,  cpUp:.09},
-    {az:2.8, len:1.15,drop:.62,cpOut:.38, cpUp:.03},
-    {az:3.2, len:.9, drop:.5,  cpOut:.26, cpUp:.08},
-    {az:3.6, len:1.0,drop:.55, cpOut:.3,  cpUp:.06},
-  ];
-  for(const rd of rootDefs){
-    const az=rd.az+(Rn()-.5)*.12;
-    // Control points for smooth arching root
-    const p0=[0,.04,0];
-    const p1=[C(az)*rd.len*.25, .04-rd.drop*.15, Sf(az)*rd.len*.25];
-    const p2=[C(az)*rd.len*.65, .04-rd.drop*.7, Sf(az)*rd.len*.65];
-    const p3=[C(az)*rd.len, .04-rd.drop, Sf(az)*rd.len];
-    for(let k=0;k<500;k++){
+  // ══════ ROOTS: 8 cubic beziers, dramatic arcs ══════════════
+  for(let r=0;r<8;r++){
+    const az=r/8*P*2+(Rn()-.5)*.15,len=.8+Rn()*.6,drop=.35+Rn()*.35;
+    const p0=[0,.03,0];
+    const p1=[C(az)*len*.3,.03-drop*.12,Sf(az)*len*.3];
+    const p2=[C(az)*len*.65,.03-drop*.65,Sf(az)*len*.65];
+    const p3=[C(az)*len,.03-drop,Sf(az)*len];
+    for(let k=0;k<600;k++){
       const t=Rn(),cp=b3(t,p0,p1,p2,p3);
-      const rad=lerp(.065,.01,t)*.75;
-      const pt=tubePoint(cp,rad);
-      const c=col(M.max(.01,cp[1]),38/360,41/360,.36,.46,.46,.60);
-      setP(pt.x,pt.y,pt.z,c[0],c[1],c[2]);ki++;
+      const T=b3t(t,p0,p1,p2,p3);
+      const rad=lerp(.08,.015,t)*.8;
+      const pt=fillDisc(cp,T,rad);
+      const c=col(M.max(.01,cp[1]),38/360,41/360,.36,.46,.46,.58);
+      PUSH(pt.x,pt.y,pt.z,c[0],c[1],c[2]);
     }
   }
 
-  // ══════ TRUNK ═════════════════════════════════════════════
-  const trunkH=1.3;
-  for(let i=0;i<1300;i++){
-    const y=Rn()*trunkH+.04;
-    const rr=Sq(Rn())*lerp(.18,.12,y/trunkH)*.82,ang=Rn()*P*2;
-    const c=col(y,39/360,41/360,.38,.44,.50,.64);
-    setP(C(ang)*rr,y,Sf(ang)*rr,c[0],c[1],c[2]);ki++;
+  // ══════ TRUNK ══════════════════════════════════════════════
+  const trunkH=1.35;
+  for(let i=0;i<1500;i++){
+    const y=Rn()*trunkH+.03;
+    const rad=lerp(.20,.13,y/trunkH)*.8;
+    // Simple disc fill at this y (tangent = (0,1,0))
+    const rr=Sq(Rn())*rad,ang=Rn()*P*2;
+    const c=col(y,39/360,41/360,.38,.44,.50,.62);
+    PUSH(M.cos(ang)*rr,y,M.sin(ang)*rr,c[0],c[1],c[2]);
   }
 
-  // ══════ BRANCHES: 15 main, each with subs + twigs ═════════
-  const NBR=15,brP=400,subP=150,twigP=60,tipP=60;
+  // ══════ BRANCHES: 15 main → sub → twig → leaf ═════════════
+  const NBR=15,brP=450,subP=180,twigP=80,tipP=80;
   for(let b=0;b<NBR;b++){
-    const tt=.08+(b/(NBR-1))*.68;
-    const y0=lerp(.18,trunkH*.9,tt);
-    const trR=lerp(.16,.1,tt)*.78;
-    const baseAz=b/NBR*P*2+(Rn()-.5)*.4;
-    const bx=C(baseAz)*trR,by=y0,bz=Sf(baseAz)*trR;
+    // Branch origin on trunk
+    const tt=.07+(b/(NBR-1))*.65;
+    const y0=lerp(.15,trunkH*.88,tt);
+    const trR=lerp(.18,.11,tt)*.78;
+    const baseAz=b/NBR*P*2+(Rn()-.5)*.35;
+    const p0=[C(baseAz)*trR,y0,Sf(baseAz)*trR];
     // Branch endpoint
-    const el=.08+Rn()*.28,len=.55+Rn()*.7;
+    const el=.06+Rn()*.3,len=.6+Rn()*.75;
     const mx=C(baseAz)*C(el),my=Sf(el),mz=Sf(baseAz)*C(el);
-    const ex=bx+mx*len,ey=by+my*len,ez=bz+mz*len;
-    // Control point bows outward & slightly up
-    const bow=.12+Rn()*.28;
-    const cpX=lerp(bx,ex,.45)+C(baseAz)*bow,cpY=lerp(by,ey,.4)+.12+Rn()*.15,cpZ=lerp(bz,ez,.45)+Sf(baseAz)*bow;
+    const p2=[p0[0]+mx*len,p0[1]+my*len,p0[2]+mz*len];
+    // Control point: bow outward + upward, giving organic arc
+    const bow=.1+Rn()*.3;
+    const p1=[lerp(p0[0],p2[0],.42)+C(baseAz)*bow,lerp(p0[1],p2[1],.38)+.1+Rn()*.12,lerp(p0[2],p2[2],.42)+Sf(baseAz)*bow];
 
-    // Main branch tube
+    // Main branch
     for(let k=0;k<brP;k++){
-      const t=Rn(),cp=b2(t,[bx,by,bz],[cpX,cpY,cpZ],[ex,ey,ez]);
-      const rad=lerp(.042,.018,t)*.7;
-      const pt=tubePoint(cp,rad);
-      const c=col(cp[1],38/360,42/360,.36,.42,.54,.76);
-      setP(pt.x,pt.y,pt.z,c[0],c[1],c[2]);ki++;
+      const t=Rn(),cp=b2(t,p0,p1,p2),T=b2t(t,p0,p1,p2);
+      const rad=lerp(.045,.02,t)*.7;
+      const pt=fillDisc(cp,T,rad);
+      const c=col(cp[1],38/360,42/360,.36,.42,.54,.74);
+      PUSH(pt.x,pt.y,pt.z,c[0],c[1],c[2]);
     }
     // Sub-branches
     const nSub=2+M.floor(Rn()*3);
     for(let s=0;s<nSub;s++){
-      const bt=.25+Rn()*.45;
-      const sb=b2(bt,[bx,by,bz],[cpX,cpY,cpZ],[ex,ey,ez]);
-      const saz=Rn()*P*2,sel=.05+Rn()*.35,slen=.12+Rn()*.26;
-      const sex=sb[0]+C(saz)*C(sel)*slen,sey=sb[1]+Sf(sel)*slen,sez=sb[2]+Sf(saz)*C(sel)*slen;
-      const scX=lerp(sb[0],sex,.45)+(Rn()-.5)*.08,scY=lerp(sb[1],sey,.4)+(Rn()-.5)*.06,scZ=lerp(sb[2],sez,.45)+(Rn()-.5)*.08;
+      const bt=.22+Rn()*.45;
+      const sb0=b2(bt,p0,p1,p2);
+      const saz=Rn()*P*2,sel=.05+Rn()*.35,slen=.14+Rn()*.3;
+      const sb2=[sb0[0]+C(saz)*C(sel)*slen,sb0[1]+Sf(sel)*slen,sb0[2]+Sf(saz)*C(sel)*slen];
+      const sb1=[lerp(sb0[0],sb2[0],.42)+(Rn()-.5)*.1,lerp(sb0[1],sb2[1],.38)+(Rn()-.5)*.08,lerp(sb0[2],sb2[2],.42)+(Rn()-.5)*.1];
       for(let k=0;k<subP;k++){
-        const t2=Rn(),cp2=b2(t2,sb,[scX,scY,scZ],[sex,sey,sez]);
-        const rad2=lerp(.025,.012,t2)*.6;
-        const pt2=tubePoint(cp2,rad2);
-        const c2=col(cp2[1],39/360,43/360,.34,.40,.60,.84);
-        setP(pt2.x,pt2.y,pt2.z,c2[0],c2[1],c2[2]);ki++;
+        const t2=Rn(),cp=b2(t2,sb0,sb1,sb2),T2=b2t(t2,sb0,sb1,sb2);
+        const rad2=lerp(.028,.014,t2)*.6;
+        const pt2=fillDisc(cp,T2,rad2);
+        const c2=col(cp[1],39/360,43/360,.34,.40,.60,.82);
+        PUSH(pt2.x,pt2.y,pt2.z,c2[0],c2[1],c2[2]);
       }
-      // Twigs from sub-branch
-      const nTwig=1+M.floor(Rn()*2);
+      // Twigs
+      const nTwig=1+M.floor(Rn()*3);
       for(let w=0;w<nTwig;w++){
-        const wt=.35+Rn()*.4;
-        const tw=b2(wt,sb,[scX,scY,scZ],[sex,sey,sez]);
-        const waz=Rn()*P*2,wel=.05+Rn()*.3,wlen=.06+Rn()*.14;
-        const wex=tw[0]+C(waz)*C(wel)*wlen,wey=tw[1]+Sf(wel)*wlen,wez=tw[2]+Sf(waz)*C(wel)*wlen;
+        const wt=.3+Rn()*.45;
+        const tw0=b2(wt,sb0,sb1,sb2);
+        const waz=Rn()*P*2,wel=.05+Rn()*.32,wlen=.07+Rn()*.16;
+        const tw2=[tw0[0]+C(waz)*C(wel)*wlen,tw0[1]+Sf(wel)*wlen,tw0[2]+Sf(waz)*C(wel)*wlen];
+        const tw1=[lerp(tw0[0],tw2[0],.45)+(Rn()-.5)*.05,lerp(tw0[1],tw2[1],.4)+(Rn()-.5)*.04,lerp(tw0[2],tw2[2],.45)+(Rn()-.5)*.05];
         for(let k=0;k<twigP;k++){
-          const t3=Rn(),cp3=lerp(tw[0],wex,t3),cp3y=lerp(tw[1],wey,t3),cp3z=lerp(tw[2],wez,t3);
-          const rad3=lerp(.015,.006,t3)*.55;
-          const pt3=tubePoint([cp3,cp3y,cp3z],rad3);
-          const c3=col(cp3y,40/360,44/360,.30,.38,.66,.88);
-          setP(pt3.x,pt3.y,pt3.z,c3[0],c3[1],c3[2]);ki++;
+          const t3=Rn(),cp=b2(t3,tw0,tw1,tw2),T3=b2t(t3,tw0,tw1,tw2);
+          const rad3=lerp(.016,.007,t3)*.5;
+          const pt3=fillDisc(cp,T3,rad3);
+          const c3=col(cp[1],40/360,44/360,.30,.38,.66,.88);
+          PUSH(pt3.x,pt3.y,pt3.z,c3[0],c3[1],c3[2]);
         }
       }
-      // Foliage cluster at sub-branch tip
+      // Leaf cluster at sub-branch tip
       for(let k=0;k<tipP;k++){
-        const cr=.08,phi=M.acos(2*Rn()-1),th=Rn()*P*2,rd=Sq(Rn())*cr;
-        const c4=col(sey,41/360,44/360,.26,.34,.68,.90);
-        setP(sex+rd*Sf(phi)*C(th),sey+rd*Sf(phi)*Sf(th)*.65,sez+rd*C(phi),c4[0],c4[1],c4[2]);ki++;
+        const cr=.09,phi=M.acos(2*Rn()-1),th=Rn()*P*2,rd=Sq(Rn())*cr;
+        const cpY=sb2[1]+rd*Sf(phi)*Sf(th)*.6;
+        const c4=col(cpY,41/360,44/360,.26,.34,.68,.90);
+        PUSH(sb2[0]+rd*Sf(phi)*C(th),cpY,sb2[2]+rd*C(phi),c4[0],c4[1],c4[2]);
       }
     }
   }
 
-  // Fill any remaining slots with branch-like structure
+  // Spillover: scatter extra particles among branches ───────
   while(ki<N){
     const ci=M.floor(Rn()*NBR);
-    const tt=.08+(ci/(NBR-1))*.68;
-    const y0=lerp(.18,trunkH*.9,tt);
-    const trR=lerp(.16,.1,tt)*.78;
-    const baseAz=ci/NBR*P*2+(Rn()-.5)*.5;
-    const bx=C(baseAz)*trR,by=y0,bz=Sf(baseAz)*trR;
-    const el=.08+Rn()*.28,len=.55+Rn()*.7;
+    const tt=.07+(ci/(NBR-1))*.65;
+    const y0=lerp(.15,trunkH*.88,tt);
+    const trR=lerp(.18,.11,tt)*.78;
+    const baseAz=ci/NBR*P*2+(Rn()-.5)*.4;
+    const p0s=[C(baseAz)*trR,y0,Sf(baseAz)*trR];
+    const el=.06+Rn()*.3,len=.6+Rn()*.75;
     const mx=C(baseAz)*C(el),my=Sf(el),mz=Sf(baseAz)*C(el);
-    const ex=bx+mx*len,ey=by+my*len,ez=bz+mz*len;
-    const bow=.12+Rn()*.28;
-    const cpX=lerp(bx,ex,.45)+C(baseAz)*bow,cpY=lerp(by,ey,.4)+.12+Rn()*.15,cpZ=lerp(bz,ez,.45)+Sf(baseAz)*bow;
-    const t=Rn(),cp=b2(t,[bx,by,bz],[cpX,cpY,cpZ],[ex,ey,ez]);
-    const rad=lerp(.042,.018,t)*.7;
-    const pt=tubePoint(cp,rad);
-    const c=col(cp[1],38/360,43/360,.34,.40,.56,.80);
-    setP(pt.x,pt.y,pt.z,c[0],c[1],c[2]);ki++;
-  }
-
-  // Halo: scatter around branch tips only (canopy rim light)
-  for(let i=0;i<NHALO;i++){
-    const ci=M.floor(Rn()*NBR);
-    const tt=.08+(ci/(NBR-1))*.68;
-    const y0=lerp(.18,trunkH*.9,tt);
-    const trR=lerp(.16,.1,tt)*.78;
-    const baseAz=ci/NBR*P*2+(Rn()-.5)*.5;
-    const bx=C(baseAz)*trR,by=y0,bz=Sf(baseAz)*trR;
-    const el=.08+Rn()*.28,len=.55+Rn()*.7;
-    const mx=C(baseAz)*C(el),my=Sf(el),mz=Sf(baseAz)*C(el);
-    const ex=bx+mx*len,ey=by+my*len,ez=bz+mz*len;
-    const bow=.12+Rn()*.28;
-    const cpX=lerp(bx,ex,.45)+C(baseAz)*bow,cpY=lerp(by,ey,.4)+.12+Rn()*.15,cpZ=lerp(bz,ez,.45)+Sf(baseAz)*bow;
-    // Halo near branch tips (t > 0.7)
-    const t=.7+Rn()*.3,cp=b2(t,[bx,by,bz],[cpX,cpY,cpZ],[ex,ey,ez]);
-    const rad=.04+(Rn()-.3)*.08,rr=rad;
-    const ang=Rn()*P*2;
-    const j=i*3;
-    hPos[j]=cp[0]+M.cos(ang)*rr;hPos[j+1]=cp[1]+M.sin(ang)*rr*.4;hPos[j+2]=cp[2]+M.sin(ang)*rr;
-    const c=col(cp[1],41/360,44/360,.24,.30,.68,.92);
-    hCol[j]=c[0];hCol[j+1]=c[1];hCol[j+2]=c[2];
+    const p2s=[p0s[0]+mx*len,p0s[1]+my*len,p0s[2]+mz*len];
+    const bow=.1+Rn()*.3;
+    const p1s=[lerp(p0s[0],p2s[0],.42)+C(baseAz)*bow,lerp(p0s[1],p2s[1],.38)+.1+Rn()*.12,lerp(p0s[2],p2s[2],.42)+Sf(baseAz)*bow];
+    const t=Rn(),cp=b2(t,p0s,p1s,p2s),T=b2t(t,p0s,p1s,p2s);
+    const rad=lerp(.045,.02,t)*.7;
+    const pt=fillDisc(cp,T,rad);
+    const c=col(cp[1],38/360,43/360,.34,.40,.56,.78);
+    PUSH(pt.x,pt.y,pt.z,c[0],c[1],c[2]);
   }
 }
 // ── Init particles to idle ──────────────────────────────────────
@@ -326,7 +310,7 @@ const hMat=new T.PointsMaterial({size:.12,map:softSprite,vertexColors:true,blend
 const haloPts=new T.Points(hGeo,hMat);
 hGeo.attributes.position.needsUpdate=true;hGeo.attributes.color.needsUpdate=true;
 haloPts.visible=false;
-const grp=new T.Group();grp.add(pts);grp.add(haloPts);scene.add(grp);
+const grp=new T.Group();grp.add(pts);scene.add(grp);
 
 // ── Ghost trails ────────────────────────────────────────────────
 const ghosts=[];
@@ -468,11 +452,11 @@ function setState(newState){
   if(newState===States.TREE){
     if(prevState!==States.FORMING_TREE)copyTargets(treePos,treeCol);
     debrisPts.visible=true;dMat.opacity=.6;
-    pts.material=treeMat;haloPts.visible=true;hMat.opacity=.35;
+    pts.material=treeMat;
   }
   if(newState===States.IDLE){
     copyTargets(idlePos,idleCol);debrisPts.visible=false;dMat.opacity=0;
-    glowShell.visible=false;pts.material=pMat;haloPts.visible=false;
+    glowShell.visible=false;pts.material=pMat;
   }
   if(newState===States.SCATTERED){
     circleBuf.length=0;dMat.opacity=.85;debrisPts.visible=true;pts.material=pMat;
@@ -997,7 +981,7 @@ addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
 });
 // DEBUG: press 't' to force TREE state for visual testing
-addEventListener('keydown',e=>{if(e.key==='t'&&state!==States.TREE){copyTargets(treePos,treeCol);prevState=States.SCATTERED;state=States.TREE;stateTime=0;debrisPts.visible=true;dMat.opacity=.6;pts.material=treeMat;haloPts.visible=true;hMat.opacity=.35;}});
+addEventListener('keydown',e=>{if(e.key==='t'&&state!==States.TREE){copyTargets(treePos,treeCol);prevState=States.SCATTERED;state=States.TREE;stateTime=0;debrisPts.visible=true;dMat.opacity=.6;pts.material=treeMat;}});
 
 // ═══════════════════════════════════════════════════════════════════
 // START
