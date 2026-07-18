@@ -743,22 +743,21 @@ function tick(){
   }
 
   if(state===States.SPHERE){
-    const sk=5,sd=3.5;
+    const sk=5,sd=4;
     for(let i=0;i<N;i++){
       const j=i*3;
-      vel[j]+=((treePos[j]-pos[j])*sk-vel[j]*sd+((Rn()-.5)*.01))*dt;
-      vel[j+1]+=((treePos[j+1]-pos[j+1])*sk-vel[j+1]*sd+((Rn()-.5)*.01))*dt;
-      vel[j+2]+=((treePos[j+2]-pos[j+2])*sk-vel[j+2]*sd+((Rn()-.5)*.006))*dt;
+      vel[j]+=((treePos[j]-pos[j])*sk-vel[j]*sd)*dt;
+      vel[j+1]+=((treePos[j+1]-pos[j+1])*sk-vel[j+1]*sd)*dt;
+      vel[j+2]+=((treePos[j+2]-pos[j+2])*sk-vel[j+2]*sd)*dt;
       tgtCol[j]=lerp(tgtCol[j],treeCol[j],3*dt);
       tgtCol[j+1]=lerp(tgtCol[j+1],treeCol[j+1],3*dt);
       tgtCol[j+2]=lerp(tgtCol[j+2],treeCol[j+2],3*dt);
     }
-    // Core: pulse gently
     for(let i=0;i<NCORE;i++){
       const j=i*3;
-      cVel[j]+=((cTreePos[j]-cPos[j])*sk-cVel[j]*sd+((Rn()-.5)*.008))*dt;
-      cVel[j+1]+=((cTreePos[j+1]-cPos[j+1])*sk-cVel[j+1]*sd+((Rn()-.5)*.008))*dt;
-      cVel[j+2]+=((cTreePos[j+2]-cPos[j+2])*sk-cVel[j+2]*sd+((Rn()-.5)*.005))*dt;
+      cVel[j]+=((cTreePos[j]-cPos[j])*sk-cVel[j]*sd)*dt;
+      cVel[j+1]+=((cTreePos[j+1]-cPos[j+1])*sk-cVel[j+1]*sd)*dt;
+      cVel[j+2]+=((cTreePos[j+2]-cPos[j+2])*sk-cVel[j+2]*sd)*dt;
       cTgtCol[j]=lerp(cTgtCol[j],cTreeCol[j],3*dt);
       cTgtCol[j+1]=lerp(cTgtCol[j+1],cTreeCol[j+1],3*dt);
       cTgtCol[j+2]=lerp(cTgtCol[j+2],cTreeCol[j+2],3*dt);
@@ -809,11 +808,11 @@ function tick(){
   // SPHERE interactions
   // ═══════════════════════════════════════════════════════════════
   if(state===States.SPHERE){
-    // Smooth openness to eliminate hand jitter
-    smoothOpenness=lerp(smoothOpenness,openness,3*dt);
+    // Heavy EMA: ~1.5s to respond, kills frame-level jitter completely
+    smoothOpenness=lerp(smoothOpenness,openness,.7*dt);
     const rawZ=6.5-smoothOpenness*12;
     const tgtZ=M.max(.4,M.min(rawZ,6.5));
-    camera.position.z=lerp(camera.position.z,tgtZ,10*dt);
+    camera.position.z=lerp(camera.position.z,tgtZ,5*dt);
     grp.scale.lerp(new T.Vector3(1,1,1),2*dt);
     corePts.scale.lerp(new T.Vector3(1,1,1),2*dt);
     const close=M.max(0,1-(camera.position.z/2.5));
